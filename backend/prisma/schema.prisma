@@ -81,6 +81,7 @@ model Session {
   instructorId   String
   googleEventId  String?
   googleMeetLink String?
+  meetingCode    String?
   startTime      DateTime
   endTime        DateTime
   status         SessionStatus @default(SCHEDULED)

@@ -41,6 +41,7 @@ export class SessionService {
     // 3. Generate Google Meet
     let meetLink: string | null = null;
     let eventId: string | null = null;
+    let meetingCode: string | null = null;
 
     try {
       const meetData = await GoogleService.createMeetEvent(
@@ -51,11 +52,12 @@ export class SessionService {
       );
       meetLink = meetData.meetLink || null;
       eventId = meetData.eventId || null;
-    } catch (error) {
-      console.error('Failed to integrate with Google Meet during session creation');
+      meetingCode = meetData.meetingCode || null;
+    } catch (error: any) {
+      console.error('Failed to integrate with Google Meet during session creation:', error.message, error.stack);
       // For MVP we might still want to create the DB record even if Meet fails, 
       // or we can throw. I'll throw to ensure data consistency as requested by "Heart of the system".
-      throw new AppError('Failed to generate Google Meet link', 500);
+      throw new AppError(error.message || 'Failed to generate Google Meet link', 500);
     }
 
     // 4. Create Session in Database
@@ -69,6 +71,7 @@ export class SessionService {
         endTime: endDate,
         googleMeetLink: meetLink,
         googleEventId: eventId,
+        meetingCode: meetingCode,
         status: 'SCHEDULED',
       },
       include: {
@@ -89,7 +92,9 @@ export class SessionService {
         allEmails,
         session.title,
         session.startTime,
-        meetLink
+        meetLink,
+        instructor.name,
+        batch.name
       );
     }
 
@@ -153,13 +158,18 @@ export class SessionService {
     });
 
     if (needsGoogleUpdate && updatedSession.googleEventId) {
-      await GoogleService.updateMeetEvent(
-        updatedSession.googleEventId,
-        updatedSession.title,
-        updatedSession.description || '',
-        updatedSession.startTime,
-        updatedSession.endTime
-      );
+      try {
+        await GoogleService.updateMeetEvent(
+          updatedSession.googleEventId,
+          updatedSession.title,
+          updatedSession.description || '',
+          updatedSession.startTime,
+          updatedSession.endTime
+        );
+      } catch (error: any) {
+        console.error('Failed to update Google Meet during session update:', error.message, error.stack);
+        // We log the error but don't crash, because the DB is already updated
+      }
     }
 
     if (needsGoogleUpdate) {
@@ -174,7 +184,9 @@ export class SessionService {
           allEmails, 
           updatedSession.title, 
           updatedSession.startTime, 
-          updatedSession.googleMeetLink || ''
+          updatedSession.googleMeetLink || '',
+          updatedSession.instructor.name,
+          updatedSession.batch.name
         ).catch(err => {
           console.error('Failed to send update emails', err);
         });
@@ -212,7 +224,13 @@ export class SessionService {
     const allEmails = [...studentEmails, session.instructor.email];
 
     if (allEmails.length > 0) {
-      await EmailService.sendCancellationNotification(allEmails, session.title, session.startTime).catch(err => {
+      await EmailService.sendCancellationNotification(
+        allEmails, 
+        session.title, 
+        session.startTime,
+        session.instructor.name,
+        session.batch.name
+      ).catch(err => {
         console.error('Failed to send cancellation emails', err);
       });
     }

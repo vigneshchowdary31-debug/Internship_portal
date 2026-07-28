@@ -41,7 +41,9 @@ export class EmailService {
     emails: string[],
     sessionTitle: string,
     startTime: Date,
-    meetLink: string
+    meetLink: string,
+    instructorName: string,
+    batchName: string
   ) {
     const transporter = this.getTransporter();
 
@@ -62,6 +64,8 @@ Hello,
 You have a new class scheduled!
 
 Title: ${sessionTitle}
+Batch: ${batchName}
+Instructor: ${instructorName}
 Date & Time: ${formattedDate}
 Google Meet Link: ${meetLink}
 
@@ -96,7 +100,9 @@ Student Training Portal
   static async sendCancellationNotification(
     emails: string[],
     sessionTitle: string,
-    startTime: Date
+    startTime: Date,
+    instructorName: string,
+    batchName: string
   ) {
     const transporter = this.getTransporter();
 
@@ -117,6 +123,8 @@ Hello,
 Please note that the following class has been CANCELLED:
 
 Title: ${sessionTitle}
+Batch: ${batchName}
+Instructor: ${instructorName}
 Date & Time: ${formattedDate}
 
 You do not need to attend this session.
@@ -151,7 +159,9 @@ Student Training Portal
     emails: string[],
     sessionTitle: string,
     startTime: Date,
-    meetLink: string
+    meetLink: string,
+    instructorName: string,
+    batchName: string
   ) {
     const transporter = this.getTransporter();
 
@@ -172,6 +182,8 @@ Hello,
 Please note that the details for the following class have been UPDATED:
 
 Title: ${sessionTitle}
+Batch: ${batchName}
+Instructor: ${instructorName}
 Date & Time: ${formattedDate}
 Google Meet Link: ${meetLink}
 

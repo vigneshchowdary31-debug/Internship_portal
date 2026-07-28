@@ -1,42 +1,67 @@
 import { google } from 'googleapis';
 import { v4 as uuidv4 } from 'uuid';
 
-// In a real application, you would load these credentials securely (e.g., from a JSON file or environment variables).
-// We use a dummy setup for the MVP if variables aren't provided, allowing the code to compile.
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
 
 export class GoogleService {
-  private static getAuthClient() {
-    const credentialsStr = process.env.GOOGLE_CREDENTIALS;
-    if (!credentialsStr) {
-      console.warn('⚠️ GOOGLE_CREDENTIALS env variable is not set. Google Meet generation will be mocked.');
-      return null;
-    }
-    try {
-      const credentials = JSON.parse(credentialsStr);
-      return new google.auth.JWT(
-        credentials.client_email,
-        undefined,
-        credentials.private_key,
-        SCOPES
+  private static getOAuthClient() {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    
+    if (!clientId || !clientSecret || !redirectUri) {
+      console.warn('⚠️ OAuth credentials not fully set. Meet generation might fail if not mocked.');
+      return new google.auth.OAuth2(
+        'mock-client-id',
+        'mock-client-secret',
+        'http://localhost:3000/api/google/callback'
       );
-    } catch (error) {
-      console.error('Failed to parse Google credentials', error);
-      return null;
     }
+
+    const oauth2Client = new google.auth.OAuth2(
+      clientId,
+      clientSecret,
+      redirectUri
+    );
+
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    if (refreshToken) {
+      oauth2Client.setCredentials({ refresh_token: refreshToken });
+    }
+
+    return oauth2Client;
+  }
+
+  static getAuthUrl() {
+    const oauth2Client = this.getOAuthClient();
+    return oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+      prompt: 'consent' // Forces refresh token generation
+    });
+  }
+
+  static async getTokensFromCode(code: string) {
+    const oauth2Client = this.getOAuthClient();
+    const { tokens } = await oauth2Client.getToken(code);
+    return tokens;
   }
 
   static async createMeetEvent(title: string, description: string, startTime: Date, endTime: Date) {
-    const auth = this.getAuthClient();
+    const auth = this.getOAuthClient();
     
-    if (!auth) {
-      // Return a mocked event if credentials aren't set
+    if (!process.env.GOOGLE_REFRESH_TOKEN) {
+      // Mocked response if refresh token is not set
+      console.warn('⚠️ GOOGLE_REFRESH_TOKEN not set. Mocking Google Meet generation.');
+      const mockCode = uuidv4().substring(0, 10);
       return {
         eventId: `mock-event-${uuidv4()}`,
-        meetLink: `https://meet.google.com/mock-${uuidv4().substring(0, 10)}`,
+        meetLink: `https://meet.google.com/mock-${mockCode}`,
+        meetingCode: `mock-${mockCode}`,
       };
     }
 
+    const calendarId = process.env.GOOGLE_CALENDAR_ID || 'primary';
     const calendar = google.calendar({ version: 'v3', auth });
 
     const event = {
@@ -60,25 +85,35 @@ export class GoogleService {
 
     try {
       const response = await calendar.events.insert({
-        calendarId: 'primary',
+        calendarId,
         requestBody: event,
-        conferenceDataVersion: 1, // crucial for generating the meet link
+        conferenceDataVersion: 1,
       });
 
+      const meetLink = response.data.hangoutLink;
+      let meetingCode = null;
+      if (meetLink) {
+        // Extract meeting code (e.g. from https://meet.google.com/abc-defg-hij)
+        const parts = meetLink.split('/');
+        meetingCode = parts[parts.length - 1];
+      }
+
       return {
-        eventId: response.data.id,
-        meetLink: response.data.hangoutLink,
+        eventId: response.data.id || null,
+        meetLink: meetLink || null,
+        meetingCode,
       };
-    } catch (error) {
-      console.error('Error creating Google Calendar event:', error);
-      throw new Error('Failed to create Google Meet event');
+    } catch (error: any) {
+      console.error('Error creating Google Calendar event:', error.message, error.stack);
+      throw new Error('Failed to create Google Meet event: ' + error.message);
     }
   }
 
   static async updateMeetEvent(eventId: string, title: string, description: string, startTime: Date, endTime: Date) {
-    const auth = this.getAuthClient();
-    if (!auth) return true; // Mocked
+    if (!process.env.GOOGLE_REFRESH_TOKEN) return true; // Mocked
 
+    const auth = this.getOAuthClient();
+    const calendarId = process.env.GOOGLE_CALENDAR_ID || 'primary';
     const calendar = google.calendar({ version: 'v3', auth });
     
     const event = {
@@ -90,25 +125,27 @@ export class GoogleService {
 
     try {
       await calendar.events.patch({
-        calendarId: 'primary',
+        calendarId,
         eventId,
         requestBody: event,
       });
       return true;
-    } catch (error) {
-      console.error('Error updating Google Calendar event:', error);
-      throw new Error('Failed to update Google Meet event');
+    } catch (error: any) {
+      console.error('Error updating Google Calendar event:', error.message, error.stack);
+      throw new Error('Failed to update Google Meet event: ' + error.message);
     }
   }
 
   static async deleteMeetEvent(eventId: string) {
-    const auth = this.getAuthClient();
-    if (!auth) return true; // Mocked
+    if (!process.env.GOOGLE_REFRESH_TOKEN) return true; // Mocked
 
+    const auth = this.getOAuthClient();
+    const calendarId = process.env.GOOGLE_CALENDAR_ID || 'primary';
     const calendar = google.calendar({ version: 'v3', auth });
+    
     try {
       await calendar.events.delete({
-        calendarId: 'primary',
+        calendarId,
         eventId,
       });
       return true;

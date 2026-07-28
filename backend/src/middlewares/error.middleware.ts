@@ -29,17 +29,24 @@ export const errorHandler = (
     });
   }
 
-  // Handle Prisma errors
-  if (err.code && err.code.startsWith('P')) {
+  // Handle Prisma validation errors
+  if (err.name === 'PrismaClientValidationError') {
     return res.status(400).json({
       success: false,
-      message: 'Database operation failed',
-      code: err.code,
+      message: 'Database validation failed',
+      details: err.message,
     });
   }
 
+  // Log unhandled errors
+  console.error('\n--- UNHANDLED ERROR ---');
+  console.error(`[${req.method}] ${req.originalUrl}`);
+  console.error('Payload:', req.body);
+  console.error(err);
+  console.error('-----------------------\n');
+
   return res.status(500).json({
     success: false,
-    message: 'Internal Server Error',
+    message: err.message || 'Internal Server Error',
   });
 };
