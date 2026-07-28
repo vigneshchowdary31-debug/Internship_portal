@@ -1,0 +1,22 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_routes_1 = __importDefault(require("./auth.routes"));
+const user_routes_1 = __importDefault(require("./user.routes"));
+const techstack_routes_1 = __importDefault(require("./techstack.routes"));
+const batch_routes_1 = __importDefault(require("./batch.routes"));
+const session_routes_1 = __importDefault(require("./session.routes"));
+const attendance_routes_1 = __importDefault(require("./attendance.routes"));
+const progress_routes_1 = __importDefault(require("./progress.routes"));
+const router = (0, express_1.Router)();
+router.use('/auth', auth_routes_1.default);
+router.use('/users', user_routes_1.default);
+router.use('/techstacks', techstack_routes_1.default);
+router.use('/batches', batch_routes_1.default);
+router.use('/sessions', session_routes_1.default);
+router.use('/attendance', attendance_routes_1.default);
+router.use('/progress', progress_routes_1.default);
+exports.default = router;

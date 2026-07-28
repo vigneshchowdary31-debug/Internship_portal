@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  INSTRUCTOR
+  STUDENT
+}
+
+enum SessionStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(STUDENT)
+  status    Boolean  @default(true) // true = active, false = inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  studentBatches    StudentBatch[]
+  instructorBatches InstructorBatch[]
+  sessions          Session[]         @relation("InstructorSessions")
+  attendances       Attendance[]
+  progressRecords   StudentProgress[]
+}
+
+model TechStack {
+  id              String            @id @default(uuid())
+  name            String            @unique
+  batches         Batch[]
+  progressRecords StudentProgress[]
+}
+
+model Batch {
+  id          String    @id @default(uuid())
+  name        String
+  techStackId String
+  techStack   TechStack @relation(fields: [techStackId], references: [id])
+
+  studentBatches    StudentBatch[]
+  instructorBatches InstructorBatch[]
+  sessions          Session[]
+}
+
+model StudentBatch {
+  studentId String
+  batchId   String
+
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@id([studentId, batchId])
+}
+
+model InstructorBatch {
+  instructorId String
+  batchId      String
+
+  instructor User  @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  batch      Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@id([instructorId, batchId])
+}
+
+model Session {
+  id             String        @id @default(uuid())
+  title          String
+  description    String?
+  batchId        String
+  instructorId   String
+  googleEventId  String?
+  googleMeetLink String?
+  startTime      DateTime
+  endTime        DateTime
+  status         SessionStatus @default(SCHEDULED)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  batch      Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  instructor User  @relation("InstructorSessions", fields: [instructorId], references: [id], onDelete: Cascade)
+
+  attendances Attendance[]
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+model Attendance {
+  id        String           @id @default(uuid())
+  sessionId String
+  studentId String
+  status    AttendanceStatus
+  remarks   String?
+  markedBy  String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, studentId])
+}
+
+enum ProgressLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+model StudentProgress {
+  id          String        @id @default(uuid())
+  studentId   String
+  techStackId String
+  progress    Int           @default(0)
+  level       ProgressLevel @default(BEGINNER)
+  notes       String?
+  lastUpdated DateTime      @default(now())
+
+  student   User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  techStack TechStack @relation(fields: [techStackId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, techStackId])
+}
