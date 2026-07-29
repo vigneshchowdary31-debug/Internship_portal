@@ -52,7 +52,8 @@ export class SessionService {
         data.title,
         data.description || `Class for ${batch.name}`,
         startDate,
-        endDate
+        endDate,
+        data.startTime
       );
       meetLink = meetData.meetLink || null;
       eventId = meetData.eventId || null;

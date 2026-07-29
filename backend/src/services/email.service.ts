@@ -22,7 +22,11 @@ export class EmailService {
         user,
         pass,
       },
-    });
+      family: 4, // Force IPv4 to avoid ENETUNREACH with IPv6 on Render
+      connectionTimeout: 10000,
+      socketTimeout: 15000,
+      greetingTimeout: 5000,
+    } as any);
 
     // Verify transporter initialization
     this.transporter.verify((error, success) => {

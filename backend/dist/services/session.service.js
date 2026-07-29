@@ -42,7 +42,7 @@ class SessionService {
         stepStart = performance.now();
         console.log(`Creating calendar event...`);
         try {
-            const meetData = await google_service_1.GoogleService.createMeetEvent(data.title, data.description || `Class for ${batch.name}`, startDate, endDate);
+            const meetData = await google_service_1.GoogleService.createMeetEvent(data.title, data.description || `Class for ${batch.name}`, startDate, endDate, data.startTime);
             meetLink = meetData.meetLink || null;
             eventId = meetData.eventId || null;
             meetingCode = meetData.meetingCode || null;

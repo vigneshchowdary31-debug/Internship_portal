@@ -50,7 +50,7 @@ export class GoogleService {
     return tokens;
   }
 
-  static async createMeetEvent(title: string, description: string, startTime: Date, endTime: Date) {
+  static async createMeetEvent(title: string, description: string, startTime: Date, endTime: Date, rawStartTime?: string) {
     const auth = this.getOAuthClient();
     
     if (!process.env.GOOGLE_REFRESH_TOKEN) {
@@ -72,9 +72,11 @@ export class GoogleService {
       description,
       start: {
         dateTime: startTime.toISOString(),
+        timeZone: 'Asia/Kolkata',
       },
       end: {
         dateTime: endTime.toISOString(),
+        timeZone: 'Asia/Kolkata',
       },
       conferenceData: {
         createRequest: {
@@ -85,6 +87,14 @@ export class GoogleService {
         },
       },
     };
+
+    console.log(`\n--- Google Calendar Event Payload ---`);
+    console.log(`Input datetime from frontend: ${rawStartTime || 'N/A'}`);
+    console.log(`Parsed backend datetime: ${startTime.toISOString()}`);
+    console.log(`Event start.dateTime: ${event.start.dateTime}`);
+    console.log(`Event end.dateTime: ${event.end.dateTime}`);
+    console.log(`Event timeZone: ${event.start.timeZone}`);
+    console.log(`-------------------------------------\n`);
 
     try {
       const insertPromise = calendar.events.insert({
