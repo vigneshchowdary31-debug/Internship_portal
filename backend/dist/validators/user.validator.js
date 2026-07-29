@@ -4,11 +4,11 @@ exports.updateProfileSchema = exports.updateUserSchema = exports.createUserSchem
 const zod_1 = require("zod");
 exports.createUserSchema = zod_1.z.object({
     body: zod_1.z.object({
-        name: zod_1.z.string({ required_error: 'Name is required' }).min(2, 'Name must be at least 2 characters'),
-        email: zod_1.z.string({ required_error: 'Email is required' }).email('Invalid email address'),
-        password: zod_1.z.string({ required_error: 'Password is required' }).min(6, 'Password must be at least 6 characters'),
+        name: zod_1.z.string({ message: 'Name is required' }).min(2, 'Name must be at least 2 characters'),
+        email: zod_1.z.string({ message: 'Email is required' }).email('Invalid email address'),
+        password: zod_1.z.string({ message: 'Password is required' }).min(6, 'Password must be at least 6 characters'),
         role: zod_1.z.enum(['ADMIN', 'INSTRUCTOR', 'STUDENT'], {
-            required_error: 'Role is required',
+            message: 'Role is required',
         }),
     }),
 });

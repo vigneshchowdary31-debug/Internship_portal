@@ -30,6 +30,23 @@ router.get('/', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     });
     res.status(200).json({ success: true, data: batches });
 }));
+// Get a single batch by ID
+router.get('/:id', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { id } = req.params;
+    const batch = await db_1.default.batch.findUnique({
+        where: { id },
+        include: {
+            techStack: true,
+            instructorBatches: { include: { instructor: { select: { id: true, name: true, email: true } } } },
+            studentBatches: { include: { student: { select: { id: true, name: true, email: true } } } },
+        },
+    });
+    if (!batch) {
+        return res.status(404).json({ success: false, message: 'Batch not found' });
+    }
+    // Optional: check if instructor has access, but for MVP returning it is fine since auth middleware protects it
+    res.status(200).json({ success: true, data: batch });
+}));
 // Create a batch (Admin only)
 router.post('/', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { name, techStackId } = req.body;
