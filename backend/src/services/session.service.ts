@@ -97,7 +97,8 @@ export class SessionService {
     const allEmails = [...studentEmails, instructor.email];
 
     if (meetLink && allEmails.length > 0) {
-      EmailService.sendSessionNotification(
+      // Fire and forget: never block the HTTP response on email delivery.
+      void EmailService.sendSessionNotification(
         allEmails,
         session.title,
         session.startTime,
@@ -195,10 +196,11 @@ export class SessionService {
       const allEmails = [...studentEmails, updatedSession.instructor.email];
 
       if (allEmails.length > 0) {
-        await EmailService.sendSessionUpdateNotification(
-          allEmails, 
-          updatedSession.title, 
-          updatedSession.startTime, 
+        // Fire and forget: never block the HTTP response on email delivery.
+        void EmailService.sendSessionUpdateNotification(
+          allEmails,
+          updatedSession.title,
+          updatedSession.startTime,
           updatedSession.googleMeetLink || '',
           updatedSession.instructor.name,
           updatedSession.batch.name
@@ -239,9 +241,10 @@ export class SessionService {
     const allEmails = [...studentEmails, session.instructor.email];
 
     if (allEmails.length > 0) {
-      await EmailService.sendCancellationNotification(
-        allEmails, 
-        session.title, 
+      // Fire and forget: never block the HTTP response on email delivery.
+      void EmailService.sendCancellationNotification(
+        allEmails,
+        session.title,
         session.startTime,
         session.instructor.name,
         session.batch.name

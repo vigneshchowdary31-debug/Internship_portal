@@ -40,6 +40,43 @@ CORS_ORIGIN=https://<your-vercel-app-url>.vercel.app
 
 *Note: Replace placeholders with your actual production URLs once Vercel and Render services are created.*
 
+## Email Delivery (IMPORTANT — Render blocks SMTP on free instances)
+
+Render **blocks outbound traffic to SMTP ports 25, 465 and 587 on free web services**
+(policy rolled out across all regions on 26 September 2025). Port 25 is blocked on
+*every* Render plan because Render runs on AWS EC2; ports 465 and 587 work on any
+**paid** instance type.
+
+Symptom of this block: the TCP connection is silently dropped, so nodemailer reports
+`ETIMEDOUT / Connection timeout` after the connection timeout expires — never
+`ECONNREFUSED` and never an authentication error.
+
+The backend detects and proves this at runtime. On boot it prints an SMTP diagnostics
+block (host, port, TLS mode, IP family, DNS result, `verify()` result) and, when the
+connection times out, runs raw TCP probes against `smtp.gmail.com:587`,
+`smtp.gmail.com:465` and `www.google.com:443`. If HTTPS connects while both SMTP ports
+time out, the block is at the platform firewall, not in the application.
+
+Options if you see that pattern:
+1. Upgrade the Render web service to any paid instance type (restores 465/587).
+2. Host the backend somewhere that permits outbound SMTP.
+3. Use an HTTP-based email API (port 443) instead of SMTP — this requires a verified
+   sending domain with most providers.
+
+Email is dispatched fire-and-forget, so a blocked SMTP port never affects session
+creation, updates, cancellations, or any API response.
+
+### Optional SMTP environment variables
+```text
+SMTP_SECURE=false              # override TLS mode; defaults to true only on port 465
+SMTP_IP_FAMILY=4               # 4 = pin IPv4 (default), 6 = IPv6, 0 = let nodemailer choose
+SMTP_CONNECTION_TIMEOUT=15000
+SMTP_GREETING_TIMEOUT=10000
+SMTP_SOCKET_TIMEOUT=25000
+SMTP_DEBUG=false               # true = log the full SMTP handshake (no credentials)
+SMTP_STARTUP_DIAGNOSTICS=true  # false = skip the boot-time verify() probe
+```
+
 ## Health Check Configuration
 To ensure zero-downtime deployments, configure the Health Check endpoint in Render's Advanced Settings:
 - **Health Check Path:** `/api/health`

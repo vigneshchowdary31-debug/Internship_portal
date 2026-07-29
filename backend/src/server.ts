@@ -2,6 +2,7 @@ import 'dotenv/config';
 import './config/env';
 import app from './app';
 import prisma from './config/db';
+import { EmailService } from './services/email.service';
 
 const PORT = process.env.PORT || 5001;
 let server: any;
@@ -14,6 +15,12 @@ async function startServer() {
 
     server = app.listen(PORT, () => {
       console.log(`🚀 Server is running on port ${PORT}`);
+
+      // Email diagnostics run after the server is listening and are never
+      // awaited: an unreachable SMTP host must not delay or block startup.
+      if (process.env.SMTP_STARTUP_DIAGNOSTICS !== 'false') {
+        void EmailService.runStartupDiagnostics();
+      }
     });
   } catch (error) {
     console.error('❌ Failed to connect to the database', error);

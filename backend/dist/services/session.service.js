@@ -82,7 +82,8 @@ class SessionService {
             .filter((email) => !!email);
         const allEmails = [...studentEmails, instructor.email];
         if (meetLink && allEmails.length > 0) {
-            email_service_1.EmailService.sendSessionNotification(allEmails, session.title, session.startTime, meetLink, instructor.name, batch.name).catch(err => {
+            // Fire and forget: never block the HTTP response on email delivery.
+            void email_service_1.EmailService.sendSessionNotification(allEmails, session.title, session.startTime, meetLink, instructor.name, batch.name).catch(err => {
                 console.error(`Email Service Error:\n${err.stack || err.message}`);
             });
             console.log(`Email Triggered: ${(performance.now() - stepStart).toFixed(2)}ms (Async)`);
@@ -149,7 +150,8 @@ class SessionService {
                 .filter(Boolean);
             const allEmails = [...studentEmails, updatedSession.instructor.email];
             if (allEmails.length > 0) {
-                await email_service_1.EmailService.sendSessionUpdateNotification(allEmails, updatedSession.title, updatedSession.startTime, updatedSession.googleMeetLink || '', updatedSession.instructor.name, updatedSession.batch.name).catch(err => {
+                // Fire and forget: never block the HTTP response on email delivery.
+                void email_service_1.EmailService.sendSessionUpdateNotification(allEmails, updatedSession.title, updatedSession.startTime, updatedSession.googleMeetLink || '', updatedSession.instructor.name, updatedSession.batch.name).catch(err => {
                     console.error(`Failed to send update emails:\n${err.stack || err.message}`);
                 });
             }
@@ -181,7 +183,8 @@ class SessionService {
             .filter(Boolean);
         const allEmails = [...studentEmails, session.instructor.email];
         if (allEmails.length > 0) {
-            await email_service_1.EmailService.sendCancellationNotification(allEmails, session.title, session.startTime, session.instructor.name, session.batch.name).catch(err => {
+            // Fire and forget: never block the HTTP response on email delivery.
+            void email_service_1.EmailService.sendCancellationNotification(allEmails, session.title, session.startTime, session.instructor.name, session.batch.name).catch(err => {
                 console.error(`Failed to send cancellation emails:\n${err.stack || err.message}`);
             });
         }

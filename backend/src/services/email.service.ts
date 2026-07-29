@@ -1,50 +1,35 @@
-import { EmailProvider } from './email/EmailProvider';
-import { GmailSMTPProvider } from './email/GmailSMTPProvider';
-import { ResendProvider } from './email/ResendProvider';
+import { SmtpMailer, type SmtpMessage } from './email/SmtpMailer';
 
+/**
+ * Email notifications for session lifecycle events.
+ *
+ * Delivery is SMTP-only and strictly best-effort. Every public method resolves,
+ * never rejects, so a mail failure can never reach the caller's request path.
+ */
 export class EmailService {
-  private static smtpProvider: EmailProvider | null = null;
-  private static resendProvider: EmailProvider | null = null;
-
-  static initialize() {
-    console.log('📧 Initializing Gmail SMTP Provider (Primary)');
-    this.smtpProvider = new GmailSMTPProvider();
-
-    if (process.env.RESEND_API_KEY) {
-      console.log('📧 Initializing Resend Provider (Fallback)');
-      this.resendProvider = new ResendProvider();
+  /** Startup banner and SMTP reachability check. Safe to call fire-and-forget. */
+  static async runStartupDiagnostics(): Promise<void> {
+    try {
+      await SmtpMailer.runStartupDiagnostics();
+    } catch (error: any) {
+      console.error('[email] Startup diagnostics failed:', error?.message || error);
     }
   }
 
-  private static async executeWithFailover(options: { to: string[]; subject: string; text: string }) {
-    if (!this.smtpProvider) {
-      this.initialize();
-    }
-
-    console.log('\n📧 Trying SMTP...');
+  private static async dispatch(message: SmtpMessage): Promise<void> {
     try {
-      await this.smtpProvider!.sendEmail(options);
-      console.log('✅ SMTP Success');
-      return;
+      await SmtpMailer.send(message);
     } catch (error: any) {
-      console.error('❌ SMTP Failed:', error.message);
-
-      if (!this.resendProvider) {
-        console.error('❌ Email delivery failed using all providers (Resend not configured).');
-        return;
-      }
-
-      console.log('📧 Retrying with Resend...');
-      try {
-        await this.resendProvider.sendEmail(options);
-        console.log('✅ Resend Success');
-        return;
-      } catch (resendError: any) {
-        console.error('❌ Resend Failed:', resendError.message);
-        console.error('❌ Email delivery failed using all providers.');
-        return;
-      }
+      // Defensive only: SmtpMailer.send already handles its own failures.
+      console.error(`[email] Unexpected error sending "${message.subject}":`, error?.message || error);
     }
+  }
+
+  private static formatDate(startTime: Date): string {
+    return new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'full',
+      timeStyle: 'short',
+    }).format(startTime);
   }
 
   static async sendSessionNotification(
@@ -56,17 +41,14 @@ export class EmailService {
     batchName: string
   ) {
     if (!emails || emails.length === 0) {
-      console.warn('⚠️ No recipients provided for session notification email.');
+      console.warn('[email] No recipients for session notification — skipping.');
       return;
     }
 
-    const formattedDate = new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'full',
-      timeStyle: 'short',
-    }).format(startTime);
-
-    const subject = `Upcoming Class: ${sessionTitle}`;
-    const text = `
+    await this.dispatch({
+      to: emails,
+      subject: `Upcoming Class: ${sessionTitle}`,
+      text: `
 Hello,
 
 You have a new class scheduled!
@@ -74,18 +56,22 @@ You have a new class scheduled!
 Title: ${sessionTitle}
 Batch: ${batchName}
 Instructor: ${instructorName}
-Date & Time: ${formattedDate}
+Date & Time: ${this.formatDate(startTime)}
 Google Meet Link: ${meetLink}
 
 Please ensure you join on time.
 
 Best Regards,
 Student Training Portal
-    `;
-
-    console.log(`Recipients: ${emails.length} users`);
-    console.log(`Subject: ${subject}`);
-    await this.executeWithFailover({ to: emails, subject, text });
+    `,
+      label: 'session notification',
+      operation: 'session creation',
+      unaffected: [
+        'Google Meet has already been created successfully.',
+        'Google Calendar has already been updated successfully.',
+        'The session has already been saved to the database.',
+      ],
+    });
   }
 
   static async sendCancellationNotification(
@@ -96,17 +82,14 @@ Student Training Portal
     batchName: string
   ) {
     if (!emails || emails.length === 0) {
-      console.warn('⚠️ No recipients provided for cancellation email.');
+      console.warn('[email] No recipients for cancellation notification — skipping.');
       return;
     }
 
-    const formattedDate = new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'full',
-      timeStyle: 'short',
-    }).format(startTime);
-
-    const subject = `CANCELLED: ${sessionTitle}`;
-    const text = `
+    await this.dispatch({
+      to: emails,
+      subject: `CANCELLED: ${sessionTitle}`,
+      text: `
 Hello,
 
 Please note that the following class has been CANCELLED:
@@ -114,17 +97,20 @@ Please note that the following class has been CANCELLED:
 Title: ${sessionTitle}
 Batch: ${batchName}
 Instructor: ${instructorName}
-Date & Time: ${formattedDate}
+Date & Time: ${this.formatDate(startTime)}
 
 You do not need to attend this session.
 
 Best Regards,
 Student Training Portal
-    `;
-
-    console.log(`Recipients: ${emails.length} users`);
-    console.log(`Subject: ${subject}`);
-    await this.executeWithFailover({ to: emails, subject, text });
+    `,
+      label: 'cancellation notification',
+      operation: 'session cancellation',
+      unaffected: [
+        'The Google Calendar event has already been removed successfully.',
+        'The session has already been marked CANCELLED in the database.',
+      ],
+    });
   }
 
   static async sendSessionUpdateNotification(
@@ -136,17 +122,14 @@ Student Training Portal
     batchName: string
   ) {
     if (!emails || emails.length === 0) {
-      console.warn('⚠️ No recipients provided for update email.');
+      console.warn('[email] No recipients for update notification — skipping.');
       return;
     }
 
-    const formattedDate = new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'full',
-      timeStyle: 'short',
-    }).format(startTime);
-
-    const subject = `UPDATED: ${sessionTitle}`;
-    const text = `
+    await this.dispatch({
+      to: emails,
+      subject: `UPDATED: ${sessionTitle}`,
+      text: `
 Hello,
 
 Please note that the details for the following class have been UPDATED:
@@ -154,20 +137,20 @@ Please note that the details for the following class have been UPDATED:
 Title: ${sessionTitle}
 Batch: ${batchName}
 Instructor: ${instructorName}
-Date & Time: ${formattedDate}
+Date & Time: ${this.formatDate(startTime)}
 Google Meet Link: ${meetLink}
 
 Please check the portal for any additional changes and ensure you join on time.
 
 Best Regards,
 Student Training Portal
-    `;
-
-    console.log(`Recipients: ${emails.length} users`);
-    console.log(`Subject: ${subject}`);
-    await this.executeWithFailover({ to: emails, subject, text });
+    `,
+      label: 'session update notification',
+      operation: 'the session update',
+      unaffected: [
+        'Google Calendar has already been updated successfully.',
+        'The session changes have already been saved to the database.',
+      ],
+    });
   }
 }
-
-// Initialize on load if env vars are present
-EmailService.initialize();
