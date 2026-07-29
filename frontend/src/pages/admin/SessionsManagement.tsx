@@ -89,8 +89,12 @@ export const SessionsManagement = () => {
 
   // Handlers
   const handleSubmitForm = (data: SessionFormData) => {
-    if (editingSession) updateMutation.mutate({ id: editingSession.id, data });
-    else createMutation.mutate(data);
+    const payload = {
+      ...data,
+      startTime: new Date(data.startTime).toISOString()
+    };
+    if (editingSession) updateMutation.mutate({ id: editingSession.id, data: payload });
+    else createMutation.mutate(payload);
   };
 
   const filteredSessions = sessions.filter((s: Session) =>

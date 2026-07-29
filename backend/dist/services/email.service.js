@@ -1,52 +1,49 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EmailService = void 0;
-const nodemailer_1 = __importDefault(require("nodemailer"));
+const GmailSMTPProvider_1 = require("./email/GmailSMTPProvider");
+const ResendProvider_1 = require("./email/ResendProvider");
 class EmailService {
-    static transporter = null;
+    static smtpProvider = null;
+    static resendProvider = null;
     static initialize() {
-        const user = process.env.SMTP_USER;
-        const pass = process.env.SMTP_PASS;
-        const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-        const port = parseInt(process.env.SMTP_PORT || '587', 10);
-        if (!user || !pass) {
-            console.warn('⚠️ SMTP credentials not provided. Real emails will NOT be sent.');
-            return;
+        console.log('📧 Initializing Gmail SMTP Provider (Primary)');
+        this.smtpProvider = new GmailSMTPProvider_1.GmailSMTPProvider();
+        if (process.env.RESEND_API_KEY) {
+            console.log('📧 Initializing Resend Provider (Fallback)');
+            this.resendProvider = new ResendProvider_1.ResendProvider();
         }
-        this.transporter = nodemailer_1.default.createTransport({
-            host,
-            port,
-            secure: port === 465, // true for 465, false for other ports
-            auth: {
-                user,
-                pass,
-            },
-            family: 4, // Force IPv4 to avoid ENETUNREACH with IPv6 on Render
-            connectionTimeout: 10000,
-            socketTimeout: 15000,
-            greetingTimeout: 5000,
-        });
-        // Verify transporter initialization
-        this.transporter.verify((error, success) => {
-            if (error) {
-                console.error('❌ SMTP Connection Error:', error);
-            }
-            else {
-                console.log('✅ SMTP Connected successfully. Server is ready to take our messages.');
-            }
-        });
     }
-    static getTransporter() {
-        if (!this.transporter) {
+    static async executeWithFailover(options) {
+        if (!this.smtpProvider) {
             this.initialize();
         }
-        return this.transporter;
+        console.log('\n📧 Trying SMTP...');
+        try {
+            await this.smtpProvider.sendEmail(options);
+            console.log('✅ SMTP Success');
+            return;
+        }
+        catch (error) {
+            console.error('❌ SMTP Failed:', error.message);
+            if (!this.resendProvider) {
+                console.error('❌ Email delivery failed using all providers (Resend not configured).');
+                return;
+            }
+            console.log('📧 Retrying with Resend...');
+            try {
+                await this.resendProvider.sendEmail(options);
+                console.log('✅ Resend Success');
+                return;
+            }
+            catch (resendError) {
+                console.error('❌ Resend Failed:', resendError.message);
+                console.error('❌ Email delivery failed using all providers.');
+                return;
+            }
+        }
     }
     static async sendSessionNotification(emails, sessionTitle, startTime, meetLink, instructorName, batchName) {
-        const transporter = this.getTransporter();
         if (!emails || emails.length === 0) {
             console.warn('⚠️ No recipients provided for session notification email.');
             return;
@@ -72,28 +69,11 @@ Please ensure you join on time.
 Best Regards,
 Student Training Portal
     `;
-        if (!transporter) {
-            console.warn('⚠️ Cannot send email: No valid SMTP transporter configured.');
-            return;
-        }
-        console.log(`\n📧 Sending Email...`);
         console.log(`Recipients: ${emails.length} users`);
         console.log(`Subject: ${subject}`);
-        try {
-            const info = await transporter.sendMail({
-                from: `"Student Training Portal" <${process.env.SMTP_USER}>`,
-                to: emails.join(', '),
-                subject,
-                text,
-            });
-            console.log(`✅ Session notification emails sent successfully. MessageId: ${info.messageId}`);
-        }
-        catch (error) {
-            console.error('❌ Failed to send session notification emails:', error);
-        }
+        await this.executeWithFailover({ to: emails, subject, text });
     }
     static async sendCancellationNotification(emails, sessionTitle, startTime, instructorName, batchName) {
-        const transporter = this.getTransporter();
         if (!emails || emails.length === 0) {
             console.warn('⚠️ No recipients provided for cancellation email.');
             return;
@@ -118,28 +98,11 @@ You do not need to attend this session.
 Best Regards,
 Student Training Portal
     `;
-        if (!transporter) {
-            console.warn('⚠️ Cannot send email: No valid SMTP transporter configured.');
-            return;
-        }
-        console.log(`\n📧 Sending Cancellation Email...`);
         console.log(`Recipients: ${emails.length} users`);
         console.log(`Subject: ${subject}`);
-        try {
-            const info = await transporter.sendMail({
-                from: `"Student Training Portal" <${process.env.SMTP_USER}>`,
-                to: emails.join(', '),
-                subject,
-                text,
-            });
-            console.log(`✅ Session cancellation emails sent successfully. MessageId: ${info.messageId}`);
-        }
-        catch (error) {
-            console.error('❌ Failed to send session cancellation emails:', error);
-        }
+        await this.executeWithFailover({ to: emails, subject, text });
     }
     static async sendSessionUpdateNotification(emails, sessionTitle, startTime, meetLink, instructorName, batchName) {
-        const transporter = this.getTransporter();
         if (!emails || emails.length === 0) {
             console.warn('⚠️ No recipients provided for update email.');
             return;
@@ -165,25 +128,9 @@ Please check the portal for any additional changes and ensure you join on time.
 Best Regards,
 Student Training Portal
     `;
-        if (!transporter) {
-            console.warn('⚠️ Cannot send email: No valid SMTP transporter configured.');
-            return;
-        }
-        console.log(`\n📧 Sending Update Email...`);
         console.log(`Recipients: ${emails.length} users`);
         console.log(`Subject: ${subject}`);
-        try {
-            const info = await transporter.sendMail({
-                from: `"Student Training Portal" <${process.env.SMTP_USER}>`,
-                to: emails.join(', '),
-                subject,
-                text,
-            });
-            console.log(`✅ Session update emails sent successfully. MessageId: ${info.messageId}`);
-        }
-        catch (error) {
-            console.error('❌ Failed to send session update emails:', error);
-        }
+        await this.executeWithFailover({ to: emails, subject, text });
     }
 }
 exports.EmailService = EmailService;

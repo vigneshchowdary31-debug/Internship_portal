@@ -55,11 +55,9 @@ class GoogleService {
             description,
             start: {
                 dateTime: startTime.toISOString(),
-                timeZone: 'Asia/Kolkata',
             },
             end: {
                 dateTime: endTime.toISOString(),
-                timeZone: 'Asia/Kolkata',
             },
             conferenceData: {
                 createRequest: {
@@ -75,7 +73,6 @@ class GoogleService {
         console.log(`Parsed backend datetime: ${startTime.toISOString()}`);
         console.log(`Event start.dateTime: ${event.start.dateTime}`);
         console.log(`Event end.dateTime: ${event.end.dateTime}`);
-        console.log(`Event timeZone: ${event.start.timeZone}`);
         console.log(`-------------------------------------\n`);
         try {
             const insertPromise = calendar.events.insert({
