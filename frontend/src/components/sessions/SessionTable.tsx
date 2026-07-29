@@ -1,4 +1,4 @@
-import { MoreHorizontal, Edit, Trash2, XCircle, ExternalLink, Calendar, Clock } from 'lucide-react';
+import { MoreHorizontal, Edit, XCircle, ExternalLink, Calendar, Clock } from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -11,7 +11,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';

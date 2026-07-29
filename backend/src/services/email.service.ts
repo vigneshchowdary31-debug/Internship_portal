@@ -6,6 +6,8 @@ export class EmailService {
   static initialize() {
     const user = process.env.SMTP_USER;
     const pass = process.env.SMTP_PASS;
+    const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+    const port = parseInt(process.env.SMTP_PORT || '587', 10);
 
     if (!user || !pass) {
       console.warn('⚠️ SMTP credentials not provided. Real emails will NOT be sent.');
@@ -13,7 +15,9 @@ export class EmailService {
     }
 
     this.transporter = nodemailer.createTransport({
-      service: 'gmail', // Assuming gmail per instructions
+      host,
+      port,
+      secure: port === 465, // true for 465, false for other ports
       auth: {
         user,
         pass,

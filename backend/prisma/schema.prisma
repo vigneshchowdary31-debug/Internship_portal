@@ -51,6 +51,8 @@ model Batch {
   studentBatches    StudentBatch[]
   instructorBatches InstructorBatch[]
   sessions          Session[]
+
+  @@index([techStackId])
 }
 
 model StudentBatch {
@@ -61,6 +63,8 @@ model StudentBatch {
   batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@id([studentId, batchId])
+  @@index([studentId])
+  @@index([batchId])
 }
 
 model InstructorBatch {
@@ -71,6 +75,8 @@ model InstructorBatch {
   batch      Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@id([instructorId, batchId])
+  @@index([instructorId])
+  @@index([batchId])
 }
 
 model Session {
@@ -92,6 +98,9 @@ model Session {
   instructor User  @relation("InstructorSessions", fields: [instructorId], references: [id], onDelete: Cascade)
 
   attendances Attendance[]
+
+  @@index([batchId])
+  @@index([instructorId])
 }
 
 enum AttendanceStatus {
@@ -115,6 +124,8 @@ model Attendance {
   student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, studentId])
+  @@index([sessionId])
+  @@index([studentId])
 }
 
 enum ProgressLevel {
@@ -136,4 +147,6 @@ model StudentProgress {
   techStack TechStack @relation(fields: [techStackId], references: [id], onDelete: Cascade)
 
   @@unique([studentId, techStackId])
+  @@index([studentId])
+  @@index([techStackId])
 }

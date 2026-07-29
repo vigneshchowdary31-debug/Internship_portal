@@ -10,11 +10,14 @@ export class GoogleService {
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
     
     if (!clientId || !clientSecret || !redirectUri) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('FATAL ERROR: Google OAuth credentials are not fully set in production environment.');
+      }
       console.warn('⚠️ OAuth credentials not fully set. Meet generation might fail if not mocked.');
       return new google.auth.OAuth2(
         'mock-client-id',
         'mock-client-secret',
-        'http://localhost:3000/api/google/callback'
+        redirectUri || 'https://mock-redirect-uri.local/callback'
       );
     }
 
