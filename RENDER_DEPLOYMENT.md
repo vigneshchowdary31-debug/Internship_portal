@@ -58,10 +58,39 @@ connection times out, runs raw TCP probes against `smtp.gmail.com:587`,
 time out, the block is at the platform firewall, not in the application.
 
 Options if you see that pattern:
-1. Upgrade the Render web service to any paid instance type (restores 465/587).
-2. Host the backend somewhere that permits outbound SMTP.
-3. Use an HTTP-based email API (port 443) instead of SMTP — this requires a verified
-   sending domain with most providers.
+1. **Use the built-in Gmail API transport** (see below) — works on the free tier, no cost.
+2. Upgrade the Render web service to any paid instance type (restores 465/587).
+3. Host the backend somewhere that permits outbound SMTP. Note that Railway also
+   restricts SMTP to its Pro plan and above, so it is not a free alternative.
+
+## Gmail API transport (works on Render Free)
+
+Because port 443 is never blocked, the backend can deliver the same notifications
+through the Gmail REST API instead of SMTP. This is the **same Gmail account** and the
+**same OAuth client** already used for Calendar and Meet — not a third-party email
+provider, and no sending domain is required.
+
+`EMAIL_TRANSPORT` controls this:
+- `auto` (default) — try SMTP; if the port is blocked, deliver over the Gmail API.
+- `smtp` — SMTP only.
+- `gmail_api` — Gmail API only (recommended on Render Free; skips the SMTP attempt).
+
+### One-time setup
+```bash
+cd backend
+npm run gmail:auth        # prints a Google consent URL
+```
+1. Start the backend (`npm run dev`) if `GOOGLE_REDIRECT_URI` points at localhost.
+2. Open the printed URL and approve the **Send email** permission.
+3. The existing `/api/google/oauth/callback` route responds with JSON — copy `refresh_token`.
+4. Set it as `GMAIL_REFRESH_TOKEN` in `.env` **and** in the Render dashboard.
+5. Restart. The startup banner prints `Gmail API Verify : ✅ Reachable — authenticated as ...`.
+
+`GOOGLE_REFRESH_TOKEN` (Calendar / Meet) is **not** touched: the Gmail token is separate
+and carries only the `gmail.send` scope, because a refresh token is bound to the scopes
+it was granted.
+
+Gmail's sending limit is roughly 500 recipients/day on a consumer account.
 
 Email is dispatched fire-and-forget, so a blocked SMTP port never affects session
 creation, updates, cancellations, or any API response.

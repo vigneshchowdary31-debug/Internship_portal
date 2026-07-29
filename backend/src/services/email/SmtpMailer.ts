@@ -1,17 +1,6 @@
 import nodemailer from 'nodemailer';
 import { classifySmtpError, probeTcpPort, resolveHost } from './smtpDiagnostics';
-
-export interface SmtpMessage {
-  to: string[];
-  subject: string;
-  text: string;
-  /** Human label for the log header, e.g. "session notification". */
-  label: string;
-  /** The business operation this email accompanies, e.g. "session creation". */
-  operation: string;
-  /** Work that already completed successfully, listed if the email fails. */
-  unaffected: string[];
-}
+import { logUnaffected, RULE, type EmailMessage, type SendResult } from './types';
 
 interface SmtpConfig {
   host: string;
@@ -25,8 +14,6 @@ interface SmtpConfig {
   socketTimeout: number;
   debug: boolean;
 }
-
-const RULE = '──────────────────────────────────────────────';
 
 function int(value: string | undefined, fallback: number): number {
   const parsed = parseInt(value || '', 10);
@@ -88,9 +75,32 @@ function handshakeLogger() {
 export class SmtpMailer {
   private static config: SmtpConfig | null = null;
 
+  /**
+   * Circuit breaker. When the SMTP port is firewalled, every send otherwise
+   * parks a socket for the full connection timeout before failing. Once a
+   * connection-level failure is seen, sends short-circuit until the cooldown
+   * expires, then one attempt is allowed through to re-test the network.
+   */
+  private static blockedUntil = 0;
+  private static blockedReason = '';
+
   static getConfig(): SmtpConfig | null {
     if (!this.config) this.config = readConfig();
     return this.config;
+  }
+
+  private static cooldownMs(): number {
+    return int(process.env.SMTP_RETRY_COOLDOWN, 600000); // 10 minutes
+  }
+
+  /** Arms the breaker after a connection-level failure. */
+  private static tripBreaker(kind: string): void {
+    this.blockedUntil = Date.now() + this.cooldownMs();
+    this.blockedReason = kind;
+  }
+
+  private static breakerOpenFor(): number {
+    return Math.max(0, this.blockedUntil - Date.now());
   }
 
   /**
@@ -139,10 +149,17 @@ export class SmtpMailer {
   }
 
   /**
-   * Sends one message. Returns true on delivery, false on any failure.
-   * Never throws and never retries.
+   * Sends one message. Never throws and never retries.
+   *
+   * When `fallbackAvailable` is set the caller has another transport ready, so
+   * failures are reported as a handover rather than as a skipped notification —
+   * claiming "email skipped" while the fallback delivers it would be a lie.
    */
-  static async send(message: SmtpMessage): Promise<boolean> {
+  static async send(
+    message: EmailMessage,
+    options: { fallbackAvailable?: boolean } = {}
+  ): Promise<SendResult> {
+    const fallback = options.fallbackAvailable === true;
     const config = this.getConfig();
 
     console.log(`\n${RULE}`);
@@ -152,15 +169,42 @@ export class SmtpMailer {
 
     if (!config) {
       console.log(`${RULE}`);
+      if (fallback) {
+        console.log('ℹ️ SMTP not configured — handing over to the Gmail API transport.');
+        return { delivered: false, kind: 'UNKNOWN_ERROR' };
+      }
       console.warn('⚠️ Email notification could not be delivered.');
       console.warn('   Reason             : SMTP is not configured (SMTP_USER / SMTP_PASS missing).');
-      this.logUnaffected(message);
-      return false;
+      logUnaffected(message);
+      return { delivered: false, kind: 'UNKNOWN_ERROR' };
     }
 
     console.log(`SMTP Host          : ${config.host}`);
     console.log(`SMTP Port          : ${config.port} (${config.secure ? 'implicit TLS' : 'STARTTLS'})`);
     console.log(`Connection Timeout : ${config.connectionTimeout}ms`);
+
+    // Short-circuit while the breaker is open: no point parking a socket for
+    // 15s per email against a port that was just proven unreachable.
+    const cooldownLeft = this.breakerOpenFor();
+    if (cooldownLeft > 0) {
+      console.log(`${RULE}`);
+      const kind = (this.blockedReason || 'CONNECTION_TIMEOUT') as SendResult['kind'];
+      if (fallback) {
+        console.log(
+          `ℹ️ SMTP skipped — proven unreachable (${this.blockedReason}), retry in ` +
+            `${Math.ceil(cooldownLeft / 1000)}s. Handing over to the Gmail API transport.`
+        );
+        return { delivered: false, kind };
+      }
+      console.warn('⚠️ Email notification could not be delivered.');
+      console.warn(`   Classification     : ${this.blockedReason}`);
+      console.warn('   Reason             : SMTP was already proven unreachable from this host, so');
+      console.warn('                        this send was skipped instead of waiting for a timeout.');
+      console.warn(`   Next attempt in    : ${Math.ceil(cooldownLeft / 1000)}s`);
+      logUnaffected(message);
+      return { delivered: false, kind };
+    }
+
     console.log('Attempting SMTP connection...');
     console.log(`${RULE}`);
 
@@ -169,8 +213,8 @@ export class SmtpMailer {
 
     if (!target.address) {
       const classified = classifySmtpError({ code: 'EDNS', message: target.error }, config.host, config.port);
-      this.logFailure(classified, Date.now() - started, message);
-      return false;
+      this.logFailure(classified, Date.now() - started, message, fallback);
+      return { delivered: false, kind: classified.kind };
     }
 
     try {
@@ -192,10 +236,15 @@ export class SmtpMailer {
       if (info.rejected && info.rejected.length > 0) {
         console.warn(`   ⚠️ Rejected : ${info.rejected.join(', ')}`);
       }
-      return true;
+      this.blockedUntil = 0; // network is healthy again
+      return { delivered: true };
     } catch (error: any) {
-      this.logFailure(classifySmtpError(error, config.host, config.port), Date.now() - started, message);
-      return false;
+      const classified = classifySmtpError(error, config.host, config.port);
+      if (classified.kind === 'CONNECTION_TIMEOUT' || classified.kind === 'NETWORK_UNREACHABLE') {
+        this.tripBreaker(classified.kind);
+      }
+      this.logFailure(classified, Date.now() - started, message, fallback);
+      return { delivered: false, kind: classified.kind };
     }
   }
 
@@ -203,24 +252,21 @@ export class SmtpMailer {
   private static logFailure(
     classified: ReturnType<typeof classifySmtpError>,
     elapsedMs: number,
-    message: SmtpMessage
+    message: EmailMessage,
+    fallbackAvailable: boolean
   ): void {
-    console.warn('⚠️ Email notification could not be delivered.');
+    console.warn(
+      fallbackAvailable
+        ? '⚠️ SMTP delivery failed — handing over to the Gmail API transport.'
+        : '⚠️ Email notification could not be delivered.'
+    );
     console.warn(`   Classification     : ${classified.kind}`);
     console.warn(`   Reason             : ${classified.reason}`);
     console.warn(`   What to check      : ${classified.action}`);
     console.warn(`   Elapsed            : ${elapsedMs} ms`);
     console.warn(`   Raw                : ${classified.detail}`);
-    this.logUnaffected(message);
-  }
-
-  /** Makes explicit, in the log, that the business transaction already succeeded. */
-  private static logUnaffected(message: SmtpMessage): void {
-    console.warn(`   This does NOT affect ${message.operation}.`);
-    message.unaffected.forEach((line) => console.warn(`   ✅ ${line}`));
-    console.warn('   ✅ The request completed normally.');
-    console.warn('   ℹ️ Email notification skipped.');
-    console.warn(`${RULE}\n`);
+    if (!fallbackAvailable) logUnaffected(message);
+    else console.warn(`${RULE}`);
   }
 
   /**
@@ -278,6 +324,13 @@ export class SmtpMailer {
       // raw TCP probes show whether the boundary is the platform or the app.
       if (classified.kind === 'CONNECTION_TIMEOUT' || classified.kind === 'NETWORK_UNREACHABLE') {
         await this.probeEgress(config);
+        // Arm the breaker so the first emails after boot fail instantly rather
+        // than parking a socket for the full connection timeout each time.
+        this.tripBreaker(classified.kind);
+        console.error(
+          `   ℹ️ Sends will be skipped immediately for the next ${Math.round(this.cooldownMs() / 60000)} ` +
+            'minute(s), then one attempt will re-test the connection.'
+        );
       }
 
       console.error('   ℹ️ Email notifications will be skipped. Session creation, Google Meet,');
