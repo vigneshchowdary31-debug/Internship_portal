@@ -12,27 +12,29 @@ export class SessionService {
     startTime: string;
     durationMinutes: number;
   }) {
-    // 1. Verify Batch & Instructor
-    const batch = await prisma.batch.findUnique({
-      where: { id: data.batchId },
-      include: {
-        studentBatches: {
-          include: { student: true },
+    console.log(`\n--- Start Session Creation ---`);
+    const startTimeOverall = performance.now();
+    let stepStart = performance.now();
+
+    // 1. Verify Batch & Instructor (Concurrent)
+    const [batch, instructor] = await Promise.all([
+      prisma.batch.findUnique({
+        where: { id: data.batchId },
+        include: {
+          studentBatches: {
+            include: { student: true },
+          },
         },
-      },
-    });
+      }),
+      prisma.user.findUnique({
+        where: { id: data.instructorId, role: 'INSTRUCTOR' },
+      })
+    ]);
 
-    if (!batch) {
-      throw new AppError('Batch not found', 404);
-    }
+    console.log(`Database Validation: ${(performance.now() - stepStart).toFixed(2)}ms`);
 
-    const instructor = await prisma.user.findUnique({
-      where: { id: data.instructorId, role: 'INSTRUCTOR' },
-    });
-
-    if (!instructor) {
-      throw new AppError('Instructor not found', 404);
-    }
+    if (!batch) throw new AppError('Batch not found', 404);
+    if (!instructor) throw new AppError('Instructor not found', 404);
 
     // 2. Calculate End Time
     const startDate = new Date(data.startTime);
@@ -43,6 +45,8 @@ export class SessionService {
     let eventId: string | null = null;
     let meetingCode: string | null = null;
 
+    stepStart = performance.now();
+    console.log(`Creating calendar event...`);
     try {
       const meetData = await GoogleService.createMeetEvent(
         data.title,
@@ -53,14 +57,16 @@ export class SessionService {
       meetLink = meetData.meetLink || null;
       eventId = meetData.eventId || null;
       meetingCode = meetData.meetingCode || null;
+      console.log(`Google Calendar/Meet: ${(performance.now() - stepStart).toFixed(2)}ms`);
+      console.log(`Calendar event created, Meet link created`);
     } catch (error: any) {
-      console.error('Failed to integrate with Google Meet during session creation:', error.message, error.stack);
-      // For MVP we might still want to create the DB record even if Meet fails, 
-      // or we can throw. I'll throw to ensure data consistency as requested by "Heart of the system".
+      console.error(`Google API Error:\n${error.stack || error.message}`);
+      console.log(`Google Calendar/Meet: ${(performance.now() - stepStart).toFixed(2)}ms (Failed)`);
       throw new AppError(error.message || 'Failed to generate Google Meet link', 500);
     }
 
     // 4. Create Session in Database
+    stepStart = performance.now();
     const session = await prisma.session.create({
       data: {
         title: data.title,
@@ -79,8 +85,10 @@ export class SessionService {
         instructor: { select: { name: true, email: true } },
       },
     });
+    console.log(`Database Insert: ${(performance.now() - stepStart).toFixed(2)}ms`);
 
-    // 5. Send Email Notifications
+    // 5. Send Email Notifications (Fire and Forget)
+    stepStart = performance.now();
     const studentEmails = batch.studentBatches
       .map((sb) => sb.student.email)
       .filter((email) => !!email);
@@ -88,15 +96,21 @@ export class SessionService {
     const allEmails = [...studentEmails, instructor.email];
 
     if (meetLink && allEmails.length > 0) {
-      await EmailService.sendSessionNotification(
+      EmailService.sendSessionNotification(
         allEmails,
         session.title,
         session.startTime,
         meetLink,
         instructor.name,
         batch.name
-      );
+      ).catch(err => {
+        console.error(`Email Service Error:\n${err.stack || err.message}`);
+      });
+      console.log(`Email Triggered: ${(performance.now() - stepStart).toFixed(2)}ms (Async)`);
     }
+
+    console.log(`Total: ${(performance.now() - startTimeOverall).toFixed(2)}ms`);
+    console.log(`--- End Session Creation ---\n`);
 
     return session;
   }
@@ -188,7 +202,7 @@ export class SessionService {
           updatedSession.instructor.name,
           updatedSession.batch.name
         ).catch(err => {
-          console.error('Failed to send update emails', err);
+          console.error(`Failed to send update emails:\n${err.stack || err.message}`);
         });
       }
     }
@@ -231,7 +245,7 @@ export class SessionService {
         session.instructor.name,
         session.batch.name
       ).catch(err => {
-        console.error('Failed to send cancellation emails', err);
+        console.error(`Failed to send cancellation emails:\n${err.stack || err.message}`);
       });
     }
 

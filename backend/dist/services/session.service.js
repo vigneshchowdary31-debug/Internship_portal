@@ -10,24 +10,28 @@ const google_service_1 = require("./google.service");
 const email_service_1 = require("./email.service");
 class SessionService {
     static async createSession(data) {
-        // 1. Verify Batch & Instructor
-        const batch = await db_1.default.batch.findUnique({
-            where: { id: data.batchId },
-            include: {
-                studentBatches: {
-                    include: { student: true },
+        console.log(`\n--- Start Session Creation ---`);
+        const startTimeOverall = performance.now();
+        let stepStart = performance.now();
+        // 1. Verify Batch & Instructor (Concurrent)
+        const [batch, instructor] = await Promise.all([
+            db_1.default.batch.findUnique({
+                where: { id: data.batchId },
+                include: {
+                    studentBatches: {
+                        include: { student: true },
+                    },
                 },
-            },
-        });
-        if (!batch) {
+            }),
+            db_1.default.user.findUnique({
+                where: { id: data.instructorId, role: 'INSTRUCTOR' },
+            })
+        ]);
+        console.log(`Database Validation: ${(performance.now() - stepStart).toFixed(2)}ms`);
+        if (!batch)
             throw new AppError_1.AppError('Batch not found', 404);
-        }
-        const instructor = await db_1.default.user.findUnique({
-            where: { id: data.instructorId, role: 'INSTRUCTOR' },
-        });
-        if (!instructor) {
+        if (!instructor)
             throw new AppError_1.AppError('Instructor not found', 404);
-        }
         // 2. Calculate End Time
         const startDate = new Date(data.startTime);
         const endDate = new Date(startDate.getTime() + data.durationMinutes * 60000);
@@ -35,19 +39,23 @@ class SessionService {
         let meetLink = null;
         let eventId = null;
         let meetingCode = null;
+        stepStart = performance.now();
+        console.log(`Creating calendar event...`);
         try {
             const meetData = await google_service_1.GoogleService.createMeetEvent(data.title, data.description || `Class for ${batch.name}`, startDate, endDate);
             meetLink = meetData.meetLink || null;
             eventId = meetData.eventId || null;
             meetingCode = meetData.meetingCode || null;
+            console.log(`Google Calendar/Meet: ${(performance.now() - stepStart).toFixed(2)}ms`);
+            console.log(`Calendar event created, Meet link created`);
         }
         catch (error) {
-            console.error('Failed to integrate with Google Meet during session creation:', error.message, error.stack);
-            // For MVP we might still want to create the DB record even if Meet fails, 
-            // or we can throw. I'll throw to ensure data consistency as requested by "Heart of the system".
+            console.error(`Google API Error:\n${error.stack || error.message}`);
+            console.log(`Google Calendar/Meet: ${(performance.now() - stepStart).toFixed(2)}ms (Failed)`);
             throw new AppError_1.AppError(error.message || 'Failed to generate Google Meet link', 500);
         }
         // 4. Create Session in Database
+        stepStart = performance.now();
         const session = await db_1.default.session.create({
             data: {
                 title: data.title,
@@ -66,14 +74,21 @@ class SessionService {
                 instructor: { select: { name: true, email: true } },
             },
         });
-        // 5. Send Email Notifications
+        console.log(`Database Insert: ${(performance.now() - stepStart).toFixed(2)}ms`);
+        // 5. Send Email Notifications (Fire and Forget)
+        stepStart = performance.now();
         const studentEmails = batch.studentBatches
             .map((sb) => sb.student.email)
             .filter((email) => !!email);
         const allEmails = [...studentEmails, instructor.email];
         if (meetLink && allEmails.length > 0) {
-            await email_service_1.EmailService.sendSessionNotification(allEmails, session.title, session.startTime, meetLink, instructor.name, batch.name);
+            email_service_1.EmailService.sendSessionNotification(allEmails, session.title, session.startTime, meetLink, instructor.name, batch.name).catch(err => {
+                console.error(`Email Service Error:\n${err.stack || err.message}`);
+            });
+            console.log(`Email Triggered: ${(performance.now() - stepStart).toFixed(2)}ms (Async)`);
         }
+        console.log(`Total: ${(performance.now() - startTimeOverall).toFixed(2)}ms`);
+        console.log(`--- End Session Creation ---\n`);
         return session;
     }
     static async getSessions(filters) {
@@ -135,7 +150,7 @@ class SessionService {
             const allEmails = [...studentEmails, updatedSession.instructor.email];
             if (allEmails.length > 0) {
                 await email_service_1.EmailService.sendSessionUpdateNotification(allEmails, updatedSession.title, updatedSession.startTime, updatedSession.googleMeetLink || '', updatedSession.instructor.name, updatedSession.batch.name).catch(err => {
-                    console.error('Failed to send update emails', err);
+                    console.error(`Failed to send update emails:\n${err.stack || err.message}`);
                 });
             }
         }
@@ -167,7 +182,7 @@ class SessionService {
         const allEmails = [...studentEmails, session.instructor.email];
         if (allEmails.length > 0) {
             await email_service_1.EmailService.sendCancellationNotification(allEmails, session.title, session.startTime, session.instructor.name, session.batch.name).catch(err => {
-                console.error('Failed to send cancellation emails', err);
+                console.error(`Failed to send cancellation emails:\n${err.stack || err.message}`);
             });
         }
         return updatedSession;

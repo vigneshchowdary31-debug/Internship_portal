@@ -12,6 +12,8 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const error_middleware_1 = require("./middlewares/error.middleware");
 const routes_1 = __importDefault(require("./routes"));
 const app = (0, express_1.default)();
+// Trust proxy for Render deployment (fixes rate limit warnings)
+app.set('trust proxy', 1);
 // Security Middlewares
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)({

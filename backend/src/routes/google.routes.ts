@@ -8,6 +8,7 @@ router.get('/auth', (req: Request, res: Response) => {
     const url = GoogleService.getAuthUrl();
     res.redirect(url);
   } catch (error: any) {
+    console.error(`Error in /auth:\n${error.stack || error.message}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -26,6 +27,7 @@ router.get('/oauth/callback', async (req: Request, res: Response) => {
       tokens
     });
   } catch (error: any) {
+    console.error(`Error in /oauth/callback:\n${error.stack || error.message}`);
     res.status(500).json({ success: false, message: error.message });
   }
 });

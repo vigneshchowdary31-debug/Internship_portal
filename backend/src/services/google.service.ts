@@ -87,11 +87,19 @@ export class GoogleService {
     };
 
     try {
-      const response = await calendar.events.insert({
+      const insertPromise = calendar.events.insert({
         calendarId,
         requestBody: event,
         conferenceDataVersion: 1,
       });
+
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Google API Timeout after 10000ms')), 10000)
+      );
+
+      console.log('Sending request to Google Calendar API...');
+      const response = await Promise.race([insertPromise, timeoutPromise]) as any;
+      console.log('Received response from Google Calendar API');
 
       const meetLink = response.data.hangoutLink;
       let meetingCode = null;
