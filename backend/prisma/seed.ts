@@ -17,6 +17,11 @@ async function main() {
         email: adminEmail,
         password: hashedPassword,
         role: Role.ADMIN,
+        // The bootstrap admin is not "enrolled" — no enrollment email is sent,
+        // so there is no temporary credential to rotate. Matches how the
+        // migration backfills every pre-existing account.
+        mustChangePassword: false,
+        passwordChangedAt: new Date(),
       },
     });
     console.log('✅ Admin user created: admin@example.com / admin123');

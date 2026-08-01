@@ -3,8 +3,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, homePathFor } from '../contexts/AuthContext';
+import { hasSeenWelcome } from '@/lib/onboarding';
 import api from '../services/api';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,30 +24,41 @@ export const Login = () => {
     resolver: zodResolver(loginSchema),
   });
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { user, login } = useAuth();
   const navigate = useNavigate();
 
+  // Already-authenticated visitors are sent onward — to the password change
+  // screen if they still owe one, otherwise to their role's dashboard.
   useEffect(() => {
     if (user) {
-      if (user.role === 'ADMIN') navigate('/admin', { replace: true });
-      else if (user.role === 'INSTRUCTOR') navigate('/instructor', { replace: true });
-      else navigate('/student', { replace: true });
+      navigate(
+        user.mustChangePassword
+          ? hasSeenWelcome(user.id)
+            ? '/change-password'
+            : '/welcome'
+          : homePathFor(user.role),
+        { replace: true }
+      );
     }
   }, [user, navigate]);
 
   const onSubmit = async (data: LoginFormValues) => {
     try {
       setErrorMsg('');
+      setIsSubmitting(true);
       const res = await api.post('/auth/login', data);
-      const { token, user } = res.data.data;
-      login(token, user);
+      const { token, user: loggedInUser } = res.data.data;
+      login(token, loggedInUser);
 
-      if (user.role === 'ADMIN') navigate('/admin');
-      else if (user.role === 'INSTRUCTOR') navigate('/instructor');
-      else navigate('/student');
-      
+      navigate(
+        loggedInUser.mustChangePassword ? '/welcome' : homePathFor(loggedInUser.role),
+        { replace: true }
+      );
     } catch (error: any) {
       setErrorMsg(error.response?.data?.message || 'Login failed. Please check your credentials.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -87,8 +100,15 @@ export const Login = () => {
               {errors.password && <p className="text-red-500 text-xs">{errors.password.message}</p>}
             </div>
 
-            <Button type="submit" className="w-full mt-4">
-              Sign In
+            <Button type="submit" className="w-full mt-4" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                'Sign In'
+              )}
             </Button>
           </form>
         </CardContent>

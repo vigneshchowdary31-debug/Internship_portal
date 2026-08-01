@@ -28,11 +28,122 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // --- Enrollment profile ---------------------------------------------------
+  // All nullable so every pre-existing row stays valid. Postgres permits
+  // multiple NULLs under a UNIQUE constraint, so legacy users without an
+  // identifier do not collide with each other.
+  //
+  // niatId/universityName apply to STUDENT, employeeId to INSTRUCTOR. They live
+  // on User rather than in separate tables because the app has always modelled
+  // all three roles as one User row; splitting them now would break every
+  // existing relation, query and role filter.
+  niatId         String? @unique
+  universityName String?
+  employeeId     String? @unique
+
+  // Tech stack the user is enrolled under / teaches. Nullable and SetNull so
+  // deleting a TechStack can never cascade into deleting people.
+  techStackId String?
+  techStack   TechStack? @relation("UserTechStack", fields: [techStackId], references: [id], onDelete: SetNull)
+
+  // --- Password lifecycle ---------------------------------------------------
+  // Defaults to true so newly enrolled users are forced through the one-time
+  // password change. The baseline migration backfills existing rows to false —
+  // they already chose their own passwords and must not be locked out.
+  mustChangePassword Boolean   @default(true)
+  passwordChangedAt  DateTime?
+  /** Stamped once, on the user's very first successful login. */
+  firstLoginAt       DateTime?
+
+  // --- Credential delivery tracking -----------------------------------------
+  // Records what happened to the enrollment email carrying the temporary
+  // password. Enrollment never depends on this — the account exists whether or
+  // not the mail left the building — but an admin needs to know when it didn't.
+  credentialStatus        CredentialStatus @default(PENDING)
+  credentialSentAt        DateTime?
+  credentialFailureReason String?
+  credentialRetryCount    Int              @default(0)
+  credentialLastRetryAt   DateTime?
+
   studentBatches    StudentBatch[]
   instructorBatches InstructorBatch[]
   sessions          Session[]         @relation("InstructorSessions")
   attendances       Attendance[]
   progressRecords   StudentProgress[]
+
+  enrollmentEvents  EnrollmentEvent[] @relation("EnrollmentEventSubject")
+  actedEvents       EnrollmentEvent[] @relation("EnrollmentEventActor")
+
+  @@index([role])
+  @@index([techStackId])
+  @@index([status, role])
+  @@index([credentialStatus])
+  @@index([mustChangePassword])
+}
+
+enum CredentialStatus {
+  /** Enrolled (or reset without email); no delivery attempted or concluded. */
+  PENDING
+  /** The original enrollment credential email was accepted by the transport. */
+  SENT
+  /** Delivery failed; credentialFailureReason explains why. */
+  FAILED
+  /** A RESET credential email was delivered — distinguishes a reset from the
+   *  original enrollment, which `SENT` alone could not express. */
+  RESET_SENT
+}
+
+enum EnrollmentEventType {
+  ENROLLED
+  /** A temporary password was minted (enrollment or reset). Always precedes a
+   *  CREDENTIAL_SENT / CREDENTIAL_FAILED pair, or stands alone when the admin
+   *  chose to deliver the credential manually. */
+  CREDENTIAL_GENERATED
+  CREDENTIAL_SENT
+  CREDENTIAL_FAILED
+  /**
+   * DEPRECATED — no longer written.
+   *
+   * Retained because PostgreSQL cannot drop an enum value that existing rows
+   * may reference, and removing it would break any database where the previous
+   * migration has already been applied. The blocked-resend workflow it recorded
+   * was replaced by "Reset & Send New Credentials", which performs the reset
+   * directly instead of refusing and redirecting.
+   */
+  CREDENTIAL_RESEND_BLOCKED
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  FIRST_LOGIN
+  ACTIVATED
+  DEACTIVATED
+  PROFILE_UPDATED
+}
+
+/**
+ * Append-only audit trail for everything that happens to an account's
+ * credentials and access.
+ *
+ * `actorId` is the admin who performed the action, and is NULL for events the
+ * user causes themselves (first login, their own password change) and for
+ * system-generated events (email delivery outcomes). It is SetNull on delete so
+ * removing an admin can never erase the history of what they did.
+ */
+model EnrollmentEvent {
+  id      String              @id @default(uuid())
+  userId  String
+  type    EnrollmentEventType
+  /** Human-readable context: failure reason, deactivation reason, etc. */
+  detail  String?
+  actorId String?
+
+  createdAt DateTime @default(now())
+
+  user  User  @relation("EnrollmentEventSubject", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("EnrollmentEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([createdAt])
 }
 
 model TechStack {
@@ -40,6 +151,7 @@ model TechStack {
   name            String            @unique
   batches         Batch[]
   progressRecords StudentProgress[]
+  users           User[]            @relation("UserTechStack")
 }
 
 model Batch {

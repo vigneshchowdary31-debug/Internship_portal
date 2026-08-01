@@ -1,0 +1,16 @@
+{
+  // Type-checks the test suite, which the build tsconfig deliberately excludes
+  // so specs are never emitted into dist/.
+  //
+  // Tests run under vitest (ESM) and use top-level await for `vi.mock` ordering,
+  // which the CommonJS build target rejects — hence the module override here.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["vitest/globals", "node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

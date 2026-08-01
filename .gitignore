@@ -31,4 +31,6 @@ out
 .DS_Store
 
 # Prisma
-backend/prisma/migrations/
+# NOTE: prisma/migrations/ is intentionally TRACKED. Migration history is the
+# only reproducible, reviewable, rollback-able record of the production schema.
+# Do not re-add it to this file.

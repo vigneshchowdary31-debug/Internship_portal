@@ -11,9 +11,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { User, ShieldCheck, AlertCircle } from 'lucide-react';
 
+// Mirrors the server policy (PasswordGeneratorService.validate). An empty
+// string means "leave my password alone", so the rules only apply once the
+// field has content.
 const profileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
-  password: z.string().min(6, 'Password must be at least 6 characters').optional().or(z.literal('')),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Password must contain an uppercase letter')
+    .regex(/[a-z]/, 'Password must contain a lowercase letter')
+    .regex(/[0-9]/, 'Password must contain a number')
+    .regex(/[^A-Za-z0-9]/, 'Password must contain a special character')
+    .optional()
+    .or(z.literal('')),
 });
 
 type ProfileFormData = z.infer<typeof profileSchema>;
@@ -115,12 +126,17 @@ export const ProfilePage = () => {
 
             <div className="space-y-2 pt-2">
               <Label htmlFor="password">New Password</Label>
-              <Input 
-                id="password" 
-                type="password" 
-                {...register('password')} 
-                placeholder="Leave blank to keep current password" 
+              <Input
+                id="password"
+                type="password"
+                autoComplete="new-password"
+                {...register('password')}
+                placeholder="Leave blank to keep current password"
               />
+              <p className="text-xs text-gray-500">
+                At least 8 characters with an uppercase letter, a lowercase letter, a number and a
+                special character.
+              </p>
               {errors.password && <p className="text-red-500 text-xs">{errors.password.message as string}</p>}
             </div>
 

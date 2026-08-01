@@ -36,7 +36,22 @@ class GoogleService {
         const { tokens } = await oauth2Client.getToken(code);
         return tokens;
     }
-    static async createMeetEvent(title, description, startTime, endTime, rawStartTime) {
+    /**
+     * Creates a Calendar event with a Google Meet link on the shared backend account.
+     *
+     * IMPORTANT — Meet host semantics on a personal (free) Gmail organizer account:
+     * The account that creates the event is the ONLY Meet host. There is no public
+     * Google API that can grant co-host / host-management rights to an attendee, and
+     * co-host is a paid-edition entitlement that free personal accounts do not have
+     * at all. See docs/google-meet-cohost-feasibility.md.
+     *
+     * What `attendeeEmails` DOES buy us: guests on the event's guest list join a
+     * personal-account meeting directly instead of knocking and waiting to be
+     * admitted. Since the shared backend account never joins the call, nobody would
+     * be able to admit knockers — so everyone who needs to attend must be on this
+     * list. This is the only supported lever available on free Google services.
+     */
+    static async createMeetEvent(title, description, startTime, endTime, rawStartTime, attendeeEmails = []) {
         const auth = this.getOAuthClient();
         if (!process.env.GOOGLE_REFRESH_TOKEN) {
             // Mocked response if refresh token is not set
@@ -50,6 +65,7 @@ class GoogleService {
         }
         const calendarId = process.env.GOOGLE_CALENDAR_ID || 'primary';
         const calendar = googleapis_1.google.calendar({ version: 'v3', auth });
+        const uniqueAttendees = [...new Set(attendeeEmails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
         const event = {
             summary: title,
             description,
@@ -59,6 +75,9 @@ class GoogleService {
             end: {
                 dateTime: endTime.toISOString(),
             },
+            attendees: uniqueAttendees.map((email) => ({ email })),
+            guestsCanInviteOthers: false,
+            guestsCanSeeOtherGuests: false,
             conferenceData: {
                 createRequest: {
                     requestId: (0, uuid_1.v4)(),
@@ -73,12 +92,17 @@ class GoogleService {
         console.log(`Parsed backend datetime: ${startTime.toISOString()}`);
         console.log(`Event start.dateTime: ${event.start.dateTime}`);
         console.log(`Event end.dateTime: ${event.end.dateTime}`);
+        console.log(`Guest list (join without knocking): ${uniqueAttendees.length} attendee(s)`);
         console.log(`-------------------------------------\n`);
         try {
             const insertPromise = calendar.events.insert({
                 calendarId,
                 requestBody: event,
                 conferenceDataVersion: 1,
+                // The app sends its own notification emails via the Gmail API, so suppress
+                // Google's duplicate invitation email. Attendees on Google accounts still
+                // get the event added to their Google Calendar.
+                sendUpdates: 'none',
             });
             const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Google API Timeout after 10000ms')), 10000));
             console.log('Sending request to Google Calendar API...');

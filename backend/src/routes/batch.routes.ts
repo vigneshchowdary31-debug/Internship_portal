@@ -12,10 +12,10 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
   let whereClause = {};
 
   // For students or instructors, we should filter, but for MVP we might just fetch what's needed.
-  if (req.user.role === 'INSTRUCTOR') {
-    whereClause = { instructorBatches: { some: { instructorId: req.user.id } } };
-  } else if (req.user.role === 'STUDENT') {
-    whereClause = { studentBatches: { some: { studentId: req.user.id } } };
+  if (req.user!.role === 'INSTRUCTOR') {
+    whereClause = { instructorBatches: { some: { instructorId: req.user!.id } } };
+  } else if (req.user!.role === 'STUDENT') {
+    whereClause = { studentBatches: { some: { studentId: req.user!.id } } };
   }
 
   const batches = await prisma.batch.findMany({

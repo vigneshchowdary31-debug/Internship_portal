@@ -5,7 +5,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 export const markAttendance = asyncHandler(async (req: Request, res: Response) => {
   const data = {
     ...req.body,
-    markedBy: req.user.id
+    markedBy: req.user!.id
   };
   const attendance = await AttendanceService.markAttendance(data);
   res.status(201).json({
@@ -17,7 +17,7 @@ export const markAttendance = asyncHandler(async (req: Request, res: Response) =
 export const updateAttendance = asyncHandler(async (req: Request, res: Response) => {
   const data = {
     ...req.body,
-    markedBy: req.user.id
+    markedBy: req.user!.id
   };
   const attendance = await AttendanceService.updateAttendance(req.params.id, data);
   res.status(200).json({

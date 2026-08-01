@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { CredentialDashboardCards } from '../components/users/CredentialDashboardCards';
 
 export const AdminDashboard = () => {
   const [isSessionDialogOpen, setIsSessionDialogOpen] = useState(false);
@@ -100,6 +101,12 @@ export const AdminDashboard = () => {
             <div className="text-2xl font-bold">{sessions.length}</div>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Credential delivery overview — Enrollment & Credential Management */}
+      <div className="mt-8">
+        <h2 className="mb-4 text-xl font-semibold">Enrollment &amp; Credentials</h2>
+        <CredentialDashboardCards />
       </div>
 
       <div className="flex justify-between items-center mt-8 mb-4">

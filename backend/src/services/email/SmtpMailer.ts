@@ -171,12 +171,16 @@ export class SmtpMailer {
       console.log(`${RULE}`);
       if (fallback) {
         console.log('ℹ️ SMTP not configured — handing over to the Gmail API transport.');
-        return { delivered: false, kind: 'UNKNOWN_ERROR' };
+        return { delivered: false, kind: 'UNKNOWN_ERROR', reason: 'SMTP is not configured' };
       }
       console.warn('⚠️ Email notification could not be delivered.');
       console.warn('   Reason             : SMTP is not configured (SMTP_USER / SMTP_PASS missing).');
       logUnaffected(message);
-      return { delivered: false, kind: 'UNKNOWN_ERROR' };
+      return {
+        delivered: false,
+        kind: 'UNKNOWN_ERROR',
+        reason: 'SMTP is not configured (SMTP_USER / SMTP_PASS missing)',
+      };
     }
 
     console.log(`SMTP Host          : ${config.host}`);
@@ -194,7 +198,7 @@ export class SmtpMailer {
           `ℹ️ SMTP skipped — proven unreachable (${this.blockedReason}), retry in ` +
             `${Math.ceil(cooldownLeft / 1000)}s. Handing over to the Gmail API transport.`
         );
-        return { delivered: false, kind };
+        return { delivered: false, kind, reason: `SMTP unreachable (${this.blockedReason})` };
       }
       console.warn('⚠️ Email notification could not be delivered.');
       console.warn(`   Classification     : ${this.blockedReason}`);
@@ -202,7 +206,7 @@ export class SmtpMailer {
       console.warn('                        this send was skipped instead of waiting for a timeout.');
       console.warn(`   Next attempt in    : ${Math.ceil(cooldownLeft / 1000)}s`);
       logUnaffected(message);
-      return { delivered: false, kind };
+      return { delivered: false, kind, reason: `SMTP unreachable (${this.blockedReason})` };
     }
 
     console.log('Attempting SMTP connection...');
@@ -214,7 +218,7 @@ export class SmtpMailer {
     if (!target.address) {
       const classified = classifySmtpError({ code: 'EDNS', message: target.error }, config.host, config.port);
       this.logFailure(classified, Date.now() - started, message, fallback);
-      return { delivered: false, kind: classified.kind };
+      return { delivered: false, kind: classified.kind, reason: classified.reason };
     }
 
     try {
@@ -223,6 +227,7 @@ export class SmtpMailer {
         to: message.to.join(', '),
         subject: message.subject,
         text: message.text,
+        ...(message.html ? { html: message.html } : {}),
       });
 
       // Reaching this point means the socket connected, TLS was negotiated and
@@ -244,7 +249,7 @@ export class SmtpMailer {
         this.tripBreaker(classified.kind);
       }
       this.logFailure(classified, Date.now() - started, message, fallback);
-      return { delivered: false, kind: classified.kind };
+      return { delivered: false, kind: classified.kind, reason: classified.reason };
     }
   }
 

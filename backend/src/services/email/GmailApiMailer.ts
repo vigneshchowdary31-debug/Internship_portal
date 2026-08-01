@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { randomBytes } from 'crypto';
 import { logUnaffected, RULE, type EmailMessage, type SendResult } from './types';
 
 /**
@@ -27,14 +28,24 @@ export class GmailApiMailer {
     return process.env.GMAIL_SENDER || process.env.SMTP_USER || '';
   }
 
-  private static client() {
+  /**
+   * The OAuth client for the Gmail transport.
+   *
+   * Uses GMAIL_REFRESH_TOKEN — deliberately NOT GOOGLE_REFRESH_TOKEN, which is
+   * scoped to calendar.events and cannot send mail.
+   */
+  private static oauthClient() {
     const auth = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
       process.env.GOOGLE_REDIRECT_URI
     );
     auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-    return google.gmail({ version: 'v1', auth });
+    return auth;
+  }
+
+  private static client() {
+    return google.gmail({ version: 'v1', auth: this.oauthClient() });
   }
 
   /** RFC 2047 encoding, so non-ASCII session titles survive the Subject header. */
@@ -44,17 +55,56 @@ export class GmailApiMailer {
     return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`;
   }
 
-  /** Builds an RFC 5322 message and base64url-encodes it for the API. */
+  /**
+   * Builds an RFC 5322 message and base64url-encodes it for the API.
+   *
+   * With `html` present the message becomes multipart/alternative: the
+   * plaintext part first, the HTML part second. Order is mandated by RFC 2046 —
+   * clients render the *last* part they understand, so text-first/HTML-second
+   * gives HTML clients the rich version and everyone else a readable fallback.
+   */
   private static buildRaw(message: EmailMessage, from: string): string {
-    const headers = [
+    const baseHeaders = [
       `From: "Student Training Portal" <${from}>`,
       `To: ${message.to.join(', ')}`,
       `Subject: ${this.encodeHeader(message.subject)}`,
       'MIME-Version: 1.0',
+    ];
+
+    if (!message.html) {
+      const headers = [
+        ...baseHeaders,
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+      ];
+      const raw = `${headers.join('\r\n')}\r\n\r\n${message.text.replace(/\n/g, '\r\n')}`;
+      return Buffer.from(raw, 'utf8').toString('base64url');
+    }
+
+    // Random boundary so it can never collide with body content.
+    const boundary = `----=_Part_${randomBytes(16).toString('hex')}`;
+    const headers = [
+      ...baseHeaders,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ];
+
+    const raw = [
+      headers.join('\r\n'),
+      '',
+      `--${boundary}`,
       'Content-Type: text/plain; charset="UTF-8"',
       'Content-Transfer-Encoding: 8bit',
-    ];
-    const raw = `${headers.join('\r\n')}\r\n\r\n${message.text.replace(/\n/g, '\r\n')}`;
+      '',
+      message.text.replace(/\n/g, '\r\n'),
+      `--${boundary}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      message.html.replace(/\n/g, '\r\n'),
+      `--${boundary}--`,
+      '',
+    ].join('\r\n');
+
     return Buffer.from(raw, 'utf8').toString('base64url');
   }
 
@@ -109,8 +159,21 @@ export class GmailApiMailer {
     }
     if (status === 403 && /insufficient|scope|permission/i.test(haystack)) {
       return {
-        reason: 'The token is valid but lacks the gmail.send scope (403).',
-        action: 'Regenerate GMAIL_REFRESH_TOKEN with `npm run gmail:auth` and approve the send permission.',
+        // Deliberately does NOT claim the token lacks gmail.send. This exact
+        // 403 is also what a *correct* send-only token returns for any read
+        // operation (users.getProfile, users.messages.list, …), because
+        // gmail.send is write-only. Asserting the cause here previously sent
+        // debugging in precisely the wrong direction. The startup banner
+        // resolves the ambiguity properly by reading the granted scopes from
+        // the OAuth2 tokeninfo endpoint.
+        reason: `Google refused the call for insufficient scopes (403) on ${
+          apiError?.message?.includes('Metadata') ? 'a metadata read' : 'this operation'
+        }.`,
+        action:
+          'Check the "Granted Scopes" list in the startup banner. If it already contains ' +
+          `${this.SCOPE}, the credential is fine and the failing call is one a send-only ` +
+          'token is not entitled to make. If it does not, regenerate GMAIL_REFRESH_TOKEN ' +
+          'with `npm run gmail:auth`.',
         detail,
       };
     }
@@ -145,18 +208,86 @@ export class GmailApiMailer {
     };
   }
 
-  /** Verifies credentials without sending. Used by startup diagnostics. */
-  static async verify(): Promise<{ ok: boolean; durationMs: number; address?: string; error?: any }> {
+  /**
+   * True when the granted scope set actually permits sending.
+   *
+   * `mail.google.com/` is the legacy full-access scope and is a superset of
+   * gmail.send, so a token holding it can send too.
+   */
+  static hasSendScope(scopes: string[] | undefined): boolean {
+    if (!scopes) return false;
+    return scopes.some((scope) => scope === this.SCOPE || scope === 'https://mail.google.com/');
+  }
+
+  /**
+   * Verifies the credential WITHOUT sending, and without calling anything the
+   * token is not entitled to.
+   *
+   * Previously this called `users.getProfile`, which was the bug this whole
+   * transport was failing on. `getProfile` requires a *read* scope
+   * (gmail.readonly / gmail.metadata / gmail.modify / mail.google.com);
+   * `gmail.send` is write-only and is deliberately NOT on that list. So a
+   * perfectly valid send-only token always came back
+   * "403 Request had insufficient authentication scopes" — and the classifier
+   * then reported the exact opposite of the truth: that the token lacked
+   * gmail.send.
+   *
+   * The correct check is the OAuth2 tokeninfo endpoint. It requires no scope at
+   * all, and it returns the authoritative list of scopes Google actually
+   * granted — which is the only thing worth verifying here.
+   */
+  static async verify(): Promise<{
+    ok: boolean;
+    durationMs: number;
+    /** Scopes Google reports for this refresh token. */
+    scopes?: string[];
+    /** OAuth client the token was issued to — catches cross-client mix-ups. */
+    audience?: string;
+    accessTokenObtained: boolean;
+    accessTokenExpiry?: string;
+    error?: any;
+    /** Set when the token is valid but not entitled to send. */
+    scopeError?: string;
+  }> {
     const started = Date.now();
+
+    let accessToken: string | undefined;
     try {
-      const profile = await this.client().users.getProfile({ userId: 'me' });
+      const auth = this.oauthClient();
+      const response = await auth.getAccessToken();
+      accessToken = response.token || undefined;
+
+      if (!accessToken) {
+        return {
+          ok: false,
+          durationMs: Date.now() - started,
+          accessTokenObtained: false,
+          error: new Error('Google returned no access token for this refresh token'),
+        };
+      }
+
+      const info = await auth.getTokenInfo(accessToken);
+      const scopes = info.scopes || [];
+      const ok = this.hasSendScope(scopes);
+
       return {
-        ok: true,
+        ok,
         durationMs: Date.now() - started,
-        address: profile.data.emailAddress || undefined,
+        scopes,
+        audience: info.aud,
+        accessTokenObtained: true,
+        accessTokenExpiry: info.expiry_date ? new Date(info.expiry_date).toISOString() : undefined,
+        scopeError: ok
+          ? undefined
+          : `The token was granted [${scopes.join(', ') || 'no scopes'}] but not ${this.SCOPE}.`,
       };
     } catch (error) {
-      return { ok: false, durationMs: Date.now() - started, error };
+      return {
+        ok: false,
+        durationMs: Date.now() - started,
+        accessTokenObtained: Boolean(accessToken),
+        error,
+      };
     }
   }
 
@@ -177,7 +308,11 @@ export class GmailApiMailer {
       console.warn('   Reason             : Gmail API is not configured (GMAIL_REFRESH_TOKEN missing).');
       console.warn('   What to check      : Run `npm run gmail:auth` and set GMAIL_REFRESH_TOKEN.');
       logUnaffected(message);
-      return { delivered: false, kind: 'UNKNOWN_ERROR' };
+      return {
+        delivered: false,
+        kind: 'UNKNOWN_ERROR',
+        reason: 'Gmail API is not configured (GMAIL_REFRESH_TOKEN missing)',
+      };
     }
 
     const from = this.senderAddress();
@@ -186,7 +321,11 @@ export class GmailApiMailer {
       console.warn('⚠️ Email notification could not be delivered.');
       console.warn('   Reason             : No sender address (set GMAIL_SENDER or SMTP_USER).');
       logUnaffected(message);
-      return { delivered: false, kind: 'UNKNOWN_ERROR' };
+      return {
+        delivered: false,
+        kind: 'UNKNOWN_ERROR',
+        reason: 'No sender address configured (GMAIL_SENDER / SMTP_USER)',
+      };
     }
 
     console.log(`Sender             : ${from}`);
@@ -216,11 +355,28 @@ export class GmailApiMailer {
       console.warn(`   Elapsed            : ${Date.now() - started} ms`);
       console.warn(`   Raw                : ${detail}`);
       logUnaffected(message);
-      return { delivered: false, kind: 'UNKNOWN_ERROR' };
+      return { delivered: false, kind: 'UNKNOWN_ERROR', reason };
     }
   }
 
-  /** Startup banner. Never prints the refresh token. */
+  /** Shows enough of an identifier to compare two values, never enough to use one. */
+  private static mask(value?: string): string {
+    if (!value) return '(unset)';
+    if (value.length <= 14) return `${value.slice(0, 4)}…(${value.length} chars)`;
+    return `${value.slice(0, 8)}…${value.slice(-4)} (${value.length} chars)`;
+  }
+
+  /**
+   * Startup banner.
+   *
+   * Prints the full OAuth picture — which client, which token, what Google
+   * actually granted — because the failure mode this replaced was one where
+   * every individual setting was correct and only the interaction between them
+   * was wrong. A banner that says "not reachable" without showing the granted
+   * scopes sends you looking in the wrong place.
+   *
+   * Never prints the refresh token or the access token.
+   */
   static async runStartupDiagnostics(): Promise<void> {
     console.log(`\n${RULE}`);
     console.log('📧 Gmail API Configuration (HTTPS/443 fallback)');
@@ -237,13 +393,51 @@ export class GmailApiMailer {
       return;
     }
 
-    console.log(`Scope              : ${this.SCOPE}`);
-    console.log(`Sender             : ${this.senderAddress()}`);
-    console.log(`Refresh token      : ******** (${process.env.GMAIL_REFRESH_TOKEN!.length} chars, never printed)`);
+    console.log(`OAuth Client ID    : ${this.mask(process.env.GOOGLE_CLIENT_ID)}`);
+    console.log(`Redirect URI       : ${process.env.GOOGLE_REDIRECT_URI || '(unset)'}`);
+    console.log('Refresh Token Src  : GMAIL_REFRESH_TOKEN (separate from GOOGLE_REFRESH_TOKEN)');
+    console.log(`Refresh Token      : ${this.mask(process.env.GMAIL_REFRESH_TOKEN)} — value never printed`);
+    console.log(`Sender (From)      : ${this.senderAddress() || '(unset)'}`);
+    console.log(`Required Scope     : ${this.SCOPE}`);
 
     const verification = await this.verify();
+
+    console.log(
+      `Access Token       : ${verification.accessTokenObtained ? '✅ obtained' : '❌ not obtained'}` +
+        (verification.accessTokenExpiry ? ` (expires ${verification.accessTokenExpiry})` : '')
+    );
+
+    if (verification.audience) {
+      const sameClient = verification.audience === process.env.GOOGLE_CLIENT_ID;
+      console.log(
+        `Token Audience     : ${this.mask(verification.audience)} ` +
+          (sameClient ? '✅ matches this OAuth client' : '❌ ISSUED TO A DIFFERENT OAUTH CLIENT')
+      );
+    }
+
+    if (verification.scopes) {
+      console.log('Granted Scopes     :');
+      if (verification.scopes.length === 0) {
+        console.log('   (none returned)');
+      } else {
+        verification.scopes.forEach((scope) => {
+          const marker = this.hasSendScope([scope]) ? '✅' : '  ';
+          console.log(`   ${marker} ${scope}`);
+        });
+      }
+    }
+
     if (verification.ok) {
-      console.log(`Gmail API Verify   : ✅ Reachable — authenticated as ${verification.address} (${verification.durationMs}ms)`);
+      console.log(`Gmail API Verify   : ✅ Ready to send (${verification.durationMs}ms)`);
+      console.log('   ℹ️ Verified by OAuth2 tokeninfo, not users.getProfile — a send-only');
+      console.log('     token is not entitled to read the profile, so getProfile would');
+      console.log('     return 403 even on a perfectly good credential.');
+    } else if (verification.scopeError) {
+      console.error(`Gmail API Verify   : ❌ Not authorised to send (${verification.durationMs}ms)`);
+      console.error(`   Reason          : ${verification.scopeError}`);
+      console.error('   What to check   : Regenerate with `npm run gmail:auth` and approve the');
+      console.error('                     "Send email on your behalf" permission. Paste the new');
+      console.error('                     value into GMAIL_REFRESH_TOKEN (not GOOGLE_REFRESH_TOKEN).');
     } else {
       const { reason, action, detail } = this.explain(verification.error);
       console.error(`Gmail API Verify   : ❌ Not Reachable (${verification.durationMs}ms)`);
@@ -251,6 +445,7 @@ export class GmailApiMailer {
       console.error(`   What to check   : ${action}`);
       console.error(`   Raw             : ${detail}`);
     }
+
     console.log(`${RULE}\n`);
   }
 }

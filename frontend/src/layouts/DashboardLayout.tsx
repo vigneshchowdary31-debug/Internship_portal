@@ -3,6 +3,7 @@ import { Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '../components/AppSidebar';
+import { hasSeenWelcome } from '@/lib/onboarding';
 
 export const DashboardLayout = ({ allowedRoles }: { allowedRoles?: string[] }) => {
   const { user, isLoading } = useAuth();
@@ -13,6 +14,17 @@ export const DashboardLayout = ({ allowedRoles }: { allowedRoles?: string[] }) =
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Nothing behind the dashboard shell is reachable until the one-time password
+  // change is done. Typing a dashboard URL directly lands here and bounces.
+  // The server enforces the same rule (403 "Password change required."), so
+  // this redirect is convenience, not the security boundary.
+  //
+  // First-timers see the welcome screen; once acknowledged they go straight to
+  // the change-password form, so a refresh mid-flow does not restart onboarding.
+  if (user.mustChangePassword) {
+    return <Navigate to={hasSeenWelcome(user.id) ? '/change-password' : '/welcome'} replace />;
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {

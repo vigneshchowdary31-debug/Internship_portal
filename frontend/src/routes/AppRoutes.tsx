@@ -19,6 +19,8 @@ const InstructorProgress = React.lazy(() => import('../pages/InstructorProgress'
 const ProfilePage = React.lazy(() => import('../pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
 const NotFoundPage = React.lazy(() => import('../pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
 const UnauthorizedPage = React.lazy(() => import('../pages/UnauthorizedPage').then(m => ({ default: m.UnauthorizedPage })));
+const ChangePasswordPage = React.lazy(() => import('../pages/ChangePasswordPage').then(m => ({ default: m.ChangePasswordPage })));
+const WelcomePage = React.lazy(() => import('../pages/WelcomePage').then(m => ({ default: m.WelcomePage })));
 
 const SuspenseFallback = () => (
   <div className="flex h-screen items-center justify-center text-gray-500">
@@ -32,6 +34,11 @@ export const AppRoutes = () => {
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
+
+        {/* Both deliberately OUTSIDE DashboardLayout: that layout redirects
+            anyone with mustChangePassword here, so nesting them would loop. */}
+        <Route path="/welcome" element={<WelcomePage />} />
+        <Route path="/change-password" element={<ChangePasswordPage />} />
         
         {/* Admin Routes */}
         <Route element={<DashboardLayout allowedRoles={['ADMIN']} />}>

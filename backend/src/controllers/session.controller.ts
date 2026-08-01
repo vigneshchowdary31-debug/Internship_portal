@@ -14,10 +14,10 @@ export const createSession = asyncHandler(async (req: Request, res: Response) =>
 export const getSessions = asyncHandler(async (req: Request, res: Response) => {
   const filters: any = {};
   
-  if (req.user.role === 'INSTRUCTOR') {
-    filters.instructorId = req.user.id;
-  } else if (req.user.role === 'STUDENT') {
-    const studentBatches = await prisma.studentBatch.findMany({ where: { studentId: req.user.id } });
+  if (req.user!.role === 'INSTRUCTOR') {
+    filters.instructorId = req.user!.id;
+  } else if (req.user!.role === 'STUDENT') {
+    const studentBatches = await prisma.studentBatch.findMany({ where: { studentId: req.user!.id } });
     filters.batchId = { in: studentBatches.map(sb => sb.batchId) };
   } else {
     // Admin can filter by query params

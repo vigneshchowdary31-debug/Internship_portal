@@ -47,13 +47,25 @@ export class SessionService {
 
     stepStart = performance.now();
     console.log(`Creating calendar event...`);
+
+    // Everyone who needs to attend must be on the Calendar guest list. The shared
+    // backend Gmail account is the sole Meet host and never joins the call, so it
+    // cannot admit anyone who knocks. Guests on the list bypass knocking entirely.
+    const batchEmails = batch.studentBatches
+      .map((sb) => sb.student.email)
+      .filter((email): email is string => !!email);
+    const calendarGuests = [instructor.email, ...batchEmails].filter(
+      (email): email is string => !!email
+    );
+
     try {
       const meetData = await GoogleService.createMeetEvent(
         data.title,
         data.description || `Class for ${batch.name}`,
         startDate,
         endDate,
-        data.startTime
+        data.startTime,
+        calendarGuests
       );
       meetLink = meetData.meetLink || null;
       eventId = meetData.eventId || null;
@@ -90,11 +102,7 @@ export class SessionService {
 
     // 5. Send Email Notifications (Fire and Forget)
     stepStart = performance.now();
-    const studentEmails = batch.studentBatches
-      .map((sb) => sb.student.email)
-      .filter((email) => !!email);
-    
-    const allEmails = [...studentEmails, instructor.email];
+    const allEmails = calendarGuests;
 
     if (meetLink && allEmails.length > 0) {
       // Fire and forget: never block the HTTP response on email delivery.
