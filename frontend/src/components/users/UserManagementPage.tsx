@@ -35,6 +35,7 @@ import { CredentialsDialog, type EnrolledCredentials } from './CredentialsDialog
 import { EnrollmentHistoryDialog } from './EnrollmentHistoryDialog';
 import { UserViewDialog } from './UserViewDialog';
 import { StatusChangeDialog } from './StatusChangeDialog';
+import { MoveStudentDialog } from '@/components/lms/MoveStudentDialog';
 
 /**
  * Shared admin page for the Students and Instructors screens.
@@ -124,6 +125,7 @@ export function UserManagementPage({ role, title, description }: UserManagementP
   const [historyUser, setHistoryUser] = useState<User | null>(null);
   const [statusTarget, setStatusTarget] = useState<User | null>(null);
   const [resetTarget, setResetTarget] = useState<{ user: User; sendEmail: boolean } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<User | null>(null);
 
   const { data: users = [], isLoading } = useQuery<User[]>({
     queryKey: ['users', role],
@@ -449,6 +451,7 @@ export function UserManagementPage({ role, title, description }: UserManagementP
             onResetAndSend={(user) => setResetTarget({ user, sendEmail: true })}
             onResetPassword={(user) => setResetTarget({ user, sendEmail: false })}
             onViewHistory={setHistoryUser}
+            onMoveBatch={isStudent ? setMoveTarget : undefined}
             onToggleStatus={setStatusTarget}
             emptyMessage={
               hasFilters
@@ -474,6 +477,12 @@ export function UserManagementPage({ role, title, description }: UserManagementP
       />
 
       <CsvImportDialog open={isImportOpen} onOpenChange={setIsImportOpen} role={role} />
+
+      <MoveStudentDialog
+        open={!!moveTarget}
+        onOpenChange={(open) => !open && setMoveTarget(null)}
+        student={moveTarget}
+      />
 
       <CredentialsDialog
         open={!!credentials}

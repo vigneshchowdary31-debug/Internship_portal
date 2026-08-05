@@ -3,6 +3,7 @@ import { Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from '../components/AppSidebar';
+import { NotificationBell } from '../components/lms/NotificationBell';
 import { hasSeenWelcome } from '@/lib/onboarding';
 
 export const DashboardLayout = ({ allowedRoles }: { allowedRoles?: string[] }) => {
@@ -40,7 +41,8 @@ export const DashboardLayout = ({ allowedRoles }: { allowedRoles?: string[] }) =
           <div className="flex-1">
             <h1 className="text-lg font-semibold capitalize">{user.role.toLowerCase()} Dashboard</h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <NotificationBell />
             <span className="text-sm text-gray-700 font-medium">Hello, {user.name}</span>
           </div>
         </header>

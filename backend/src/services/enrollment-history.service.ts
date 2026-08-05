@@ -44,6 +44,10 @@ const EVENT_META: Record<
   ACTIVATED: { label: 'Account activated', tone: 'good', icon: 'power' },
   DEACTIVATED: { label: 'Account deactivated', tone: 'bad', icon: 'power-off' },
   PROFILE_UPDATED: { label: 'Profile updated', tone: 'neutral', icon: 'pencil' },
+  // --- LMS Phase 1: batch membership lifecycle ---
+  BATCH_ASSIGNED: { label: 'Assigned to batch', tone: 'good', icon: 'users' },
+  BATCH_TRANSFERRED: { label: 'Transferred between batches', tone: 'neutral', icon: 'arrow-right-left' },
+  BATCH_REMOVED: { label: 'Removed from batch', tone: 'bad', icon: 'user-minus' },
 };
 
 export class EnrollmentHistoryService {

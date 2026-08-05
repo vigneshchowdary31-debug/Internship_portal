@@ -52,7 +52,9 @@ model User {
   // they already chose their own passwords and must not be locked out.
   mustChangePassword Boolean   @default(true)
   passwordChangedAt  DateTime?
-  /** Stamped once, on the user's very first successful login. */
+  /**
+   * Stamped once, on the user's very first successful login.
+   */
   firstLoginAt       DateTime?
 
   // --- Credential delivery tracking -----------------------------------------
@@ -71,8 +73,18 @@ model User {
   attendances       Attendance[]
   progressRecords   StudentProgress[]
 
-  enrollmentEvents  EnrollmentEvent[] @relation("EnrollmentEventSubject")
-  actedEvents       EnrollmentEvent[] @relation("EnrollmentEventActor")
+  enrollmentEvents EnrollmentEvent[] @relation("EnrollmentEventSubject")
+  actedEvents      EnrollmentEvent[] @relation("EnrollmentEventActor")
+
+  // --- LMS back-relations (Phase 1). Prisma requires these; they emit no SQL.
+  authoredPaths         LearningPath[]          @relation("PathAuthor")
+  authoredModules       Module[]                @relation("ModuleAuthor")
+  authoredContents      Content[]               @relation("ContentAuthor")
+  editedContents        Content[]               @relation("ContentEditor")
+  uploadedAssets        MediaAsset[]            @relation("AssetUploader")
+  contentProgress       ContentProgress[]       @relation("StudentContentProgress")
+  authoredNotifications Notification[]          @relation("NotificationAuthor")
+  notifications         NotificationRecipient[] @relation("NotificationRecipient")
 
   @@index([role])
   @@index([techStackId])
@@ -82,28 +94,37 @@ model User {
 }
 
 enum CredentialStatus {
-  /** Enrolled (or reset without email); no delivery attempted or concluded. */
+  /**
+   * Enrolled (or reset without email); no delivery attempted or concluded.
+   */
   PENDING
-  /** The original enrollment credential email was accepted by the transport. */
+  /**
+   * The original enrollment credential email was accepted by the transport.
+   */
   SENT
-  /** Delivery failed; credentialFailureReason explains why. */
+  /**
+   * Delivery failed; credentialFailureReason explains why.
+   */
   FAILED
-  /** A RESET credential email was delivered — distinguishes a reset from the
-   *  original enrollment, which `SENT` alone could not express. */
+  /**
+   * A RESET credential email was delivered — distinguishes a reset from the
+   * original enrollment, which `SENT` alone could not express.
+   */
   RESET_SENT
 }
 
 enum EnrollmentEventType {
   ENROLLED
-  /** A temporary password was minted (enrollment or reset). Always precedes a
-   *  CREDENTIAL_SENT / CREDENTIAL_FAILED pair, or stands alone when the admin
-   *  chose to deliver the credential manually. */
+  /**
+   * A temporary password was minted (enrollment or reset). Always precedes a
+   * CREDENTIAL_SENT / CREDENTIAL_FAILED pair, or stands alone when the admin
+   * chose to deliver the credential manually.
+   */
   CREDENTIAL_GENERATED
   CREDENTIAL_SENT
   CREDENTIAL_FAILED
   /**
    * DEPRECATED — no longer written.
-   *
    * Retained because PostgreSQL cannot drop an enum value that existing rows
    * may reference, and removing it would break any database where the previous
    * migration has already been applied. The blocked-resend workflow it recorded
@@ -117,12 +138,15 @@ enum EnrollmentEventType {
   ACTIVATED
   DEACTIVATED
   PROFILE_UPDATED
+  /// LMS Phase 1: batch membership lifecycle.
+  BATCH_ASSIGNED
+  BATCH_TRANSFERRED
+  BATCH_REMOVED
 }
 
 /**
  * Append-only audit trail for everything that happens to an account's
  * credentials and access.
- *
  * `actorId` is the admin who performed the action, and is NULL for events the
  * user causes themselves (first login, their own password change) and for
  * system-generated events (email delivery outcomes). It is SetNull on delete so
@@ -132,7 +156,9 @@ model EnrollmentEvent {
   id      String              @id @default(uuid())
   userId  String
   type    EnrollmentEventType
-  /** Human-readable context: failure reason, deactivation reason, etc. */
+  /**
+   * Human-readable context: failure reason, deactivation reason, etc.
+   */
   detail  String?
   actorId String?
 
@@ -147,11 +173,28 @@ model EnrollmentEvent {
 }
 
 model TechStack {
-  id              String            @id @default(uuid())
-  name            String            @unique
+  id   String @id @default(uuid())
+  name String @unique
+
+  // --- LMS additions (Phase 1). All nullable/defaulted: existing rows stay valid.
+  code        String?  @unique
+  description String?
+  isActive    Boolean  @default(true)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
   batches         Batch[]
   progressRecords StudentProgress[]
   users           User[]            @relation("UserTechStack")
+  learningPaths   LearningPath[]
+}
+
+enum BatchStatus {
+  UPCOMING
+  ACTIVE
+  COMPLETED
+  ARCHIVED
 }
 
 model Batch {
@@ -160,21 +203,51 @@ model Batch {
   techStackId String
   techStack   TechStack @relation(fields: [techStackId], references: [id])
 
+  // --- LMS additions (Phase 1) ---
+  // `techStackId` is deliberately KEPT even though LearningPath also carries it:
+  // it is required by the live POST/PATCH /batches endpoints and the batch form.
+  // The service layer enforces batch.learningPath.techStackId === batch.techStackId.
+  //
+  // Nullable rather than required: existing batches have no path until the M1
+  // backfill runs, and a nullable FK that is always populated by the write paths
+  // is safer than a NOT NULL that can fail a deploy.
+  learningPathId String?
+  learningPath   LearningPath? @relation(fields: [learningPathId], references: [id], onDelete: Restrict)
+
+  code      String?     @unique
+  startDate DateTime?
+  endDate   DateTime?
+  status    BatchStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
   studentBatches    StudentBatch[]
   instructorBatches InstructorBatch[]
   sessions          Session[]
+  contents          Content[]
+  notifications     Notification[]
 
   @@index([techStackId])
+  @@index([learningPathId])
+  @@index([status])
 }
 
 model StudentBatch {
-  studentId String
-  batchId   String
+  studentId  String
+  batchId    String
+  /// When this membership began. Set on assignment and on transfer, so the
+  /// timeline of a student's batch history is reconstructable from the audit
+  /// trail plus this timestamp.
+  assignedAt DateTime @default(now())
 
   student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   batch   Batch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@id([studentId, batchId])
+  /// One active batch per student. Assigning a student who already belongs to
+  /// another batch is a MOVE, performed transactionally by
+  /// BatchMembershipService — never an insert that violates this.
+  @@unique([studentId])
   @@index([studentId])
   @@index([batchId])
 }
@@ -246,6 +319,9 @@ enum ProgressLevel {
   ADVANCED
 }
 
+/// Instructor's MANUAL proficiency assessment. Deliberately untouched by the
+/// LMS — objective learning progress lives in ContentProgress. The dashboard
+/// shows both, clearly labelled as different things.
 model StudentProgress {
   id          String        @id @default(uuid())
   studentId   String
@@ -261,4 +337,359 @@ model StudentProgress {
   @@unique([studentId, techStackId])
   @@index([studentId])
   @@index([techStackId])
+}
+
+// ===========================================================================
+// LMS — Phase 1: curriculum, content, storage, progress
+// ===========================================================================
+
+enum LearningPathStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+/// A versioned curriculum for a tech stack — "MERN 2026", "MERN 2027".
+///
+/// Cloning a path deep-copies its modules and content, which is what lets the
+/// curriculum evolve without a single migration. Batches pin to a version, so
+/// publishing a new one never disturbs a cohort already running the old one.
+model LearningPath {
+  id          String             @id @default(uuid())
+  techStackId String
+  name        String
+  version     String
+  description String?
+  status      LearningPathStatus @default(DRAFT)
+  /// The path new batches receive unless an admin picks another.
+  isDefault   Boolean            @default(false)
+
+  /// Provenance when this path was cloned from another.
+  clonedFromId String?
+  createdById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  techStack  TechStack      @relation(fields: [techStackId], references: [id], onDelete: Cascade)
+  clonedFrom LearningPath?  @relation("PathLineage", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones     LearningPath[] @relation("PathLineage")
+  createdBy  User?          @relation("PathAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  modules  Module[]
+  contents Content[]
+  /// Restrict: refuse to delete a path a cohort is actively running.
+  batches  Batch[]
+
+  @@unique([techStackId, version])
+  @@index([techStackId, status])
+}
+
+enum ModuleDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+model Module {
+  id             String  @id @default(uuid())
+  learningPathId String
+  name           String
+  description    String?
+  position       Int     @default(0)
+  isVisible      Boolean @default(true)
+
+  // --- Descriptive metadata. NOT enforced (approved decision 7). ---
+  estimatedDurationMinutes Int?
+  difficulty               ModuleDifficulty?
+
+  /// Lineage root, stable across clones. Two modules are "the same module in a
+  /// different curriculum version" iff they share an originId. This is what
+  /// lets a transferred student's completed work count toward an equivalent
+  /// module in their new Learning Path.
+  ///
+  /// Set to the module's own id on first creation; carried unchanged by clones.
+  originId String?
+
+  /// Card art for the module grid. A MediaAsset rather than a URL string, so
+  /// thumbnails go through the same signed-upload and deletion path as every
+  /// other file — no second storage code path.
+  thumbnailAssetId String?
+
+  /// Reserved for AI Tutor / AI quiz generation. Unstructured so AI metadata
+  /// never requires a migration.
+  aiMetadata  Json?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ModuleAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  /// SetNull, matching Content.asset: deleting the image degrades the card to a
+  /// placeholder rather than blocking the delete or cascading away the module.
+  thumbnail    MediaAsset?  @relation("ModuleThumbnail", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
+
+  contents      Content[]
+  prerequisites ModulePrerequisite[] @relation("ModuleRequires")
+  requiredBy    ModulePrerequisite[] @relation("ModuleRequiredBy")
+
+  @@index([learningPathId, position])
+  @@index([learningPathId, isVisible])
+  @@index([originId])
+}
+
+/// Prerequisite graph. Stored as a relation rather than free text so it can be
+/// ENFORCED later by adding one check to the visibility resolver — with no
+/// schema change. Today it is displayed and nothing more.
+model ModulePrerequisite {
+  moduleId       String
+  prerequisiteId String
+
+  module       Module @relation("ModuleRequires", fields: [moduleId], references: [id], onDelete: Cascade)
+  prerequisite Module @relation("ModuleRequiredBy", fields: [prerequisiteId], references: [id], onDelete: Cascade)
+
+  @@id([moduleId, prerequisiteId])
+  @@index([prerequisiteId])
+}
+
+enum ContentType {
+  PDF
+  PPT
+  DOCX
+  GITHUB_REPO
+  RECORDING
+  LINK
+  VIDEO
+  /// Supplementary reading — carries either a file or a URL, unlike every other
+  /// type which requires exactly one. Appended last: reordering an enum
+  /// rewrites existing rows' meaning.
+  REFERENCE
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum VisibilityScope {
+  LEARNING_PATH
+  BATCH
+}
+
+model Content {
+  id             String        @id @default(uuid())
+  moduleId       String
+  /// Denormalised one hop up from Module. Keeps the visibility query — run on
+  /// every student page load — free of a join.
+  learningPathId String
+  title          String
+  description    String?
+  type           ContentType
+  status         ContentStatus @default(DRAFT)
+  position       Int           @default(0)
+
+  // --- Visibility ---
+  scope       VisibilityScope @default(LEARNING_PATH)
+  batchId     String?
+  /// When set, this batch-scoped item REPLACES the referenced global item for
+  /// its batch. Null on a batch item means "inherit global and add this too".
+  overridesId String?         @unique
+
+  /// NULL = released immediately. Evaluated lazily at read time — no scheduler.
+  releaseAt DateTime?
+
+  // --- Payload: exactly one is populated, per `type` ---
+  assetId     String?
+  externalUrl String?
+
+  /// Lineage root, stable across clones. See Module.originId.
+  originId String?
+
+  version     Int      @default(1)
+  createdById String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  batch        Batch?       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  asset        MediaAsset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  overrides    Content?     @relation("ContentOverride", fields: [overridesId], references: [id], onDelete: SetNull)
+  overriddenBy Content?     @relation("ContentOverride")
+  createdBy    User?        @relation("ContentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?        @relation("ContentEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  progress ContentProgress[]
+
+  @@index([moduleId, status, position])
+  @@index([learningPathId, status])
+  @@index([batchId])
+  @@index([releaseAt])
+  @@index([originId])
+}
+
+enum StorageProvider {
+  CLOUDINARY
+  SUPABASE
+}
+
+/// Provider-agnostic file record. Content references an asset, never a raw URL,
+/// so the storage provider can change without touching content rows.
+model MediaAsset {
+  id               String          @id @default(uuid())
+  provider         StorageProvider @default(CLOUDINARY)
+  /// The provider's ACTUAL identifier, as returned by the upload response —
+  /// never the key we pre-signed.
+  ///
+  /// Cloudinary appends the file extension to `public_id` for `raw` assets
+  /// (`…/notes-ab12.docx`) but not for `image` assets (`…/notes-ab12`). Storing
+  /// the signed key instead made every raw delete return `"result":"not found"`.
+  providerKey      String
+  url              String
+  originalFilename String
+  mimeType         String
+  sizeBytes        Int
+  /// Cloudinary's classification: `image` | `raw` | `video`.
+  ///
+  /// Required to delete: the destroy endpoint is
+  /// `/v1_1/<cloud>/<resourceType>/destroy` and rejects `auto` outright with
+  /// "Invalid resource type 'auto'".
+  ///
+  /// Verified empirically — note PDF is classified `image`, not `raw`, because
+  /// Cloudinary can render and transform PDFs. Deriving this from mimeType
+  /// would encode that quirk as an assumption; storing what the provider
+  /// actually said cannot drift.
+  resourceType     String?
+  /// Cloudinary's normalised format (`pdf`, `png`, `jpg`). Absent for `raw`
+  /// assets, so nullable by nature rather than by caution.
+  format           String?
+  checksum         String?
+  uploadedById     String?
+  createdAt        DateTime        @default(now())
+
+  moduleThumbnails Module[] @relation("ModuleThumbnail")
+
+  uploadedBy User?     @relation("AssetUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  contents   Content[]
+
+  @@unique([provider, providerKey])
+  @@index([uploadedById])
+}
+
+/// OBJECTIVE consumption tracking — what the student actually opened.
+/// Distinct from StudentProgress, which is the instructor's subjective rating.
+model ContentProgress {
+  id        String @id @default(uuid())
+  studentId String
+  contentId String
+
+  /// Split counters power analytics without an unbounded event-log table.
+  viewCount     Int @default(0)
+  downloadCount Int @default(0)
+  openCount     Int @default(0)
+
+  firstViewedAt DateTime  @default(now())
+  /// Drives the "Continue Learning" widget.
+  lastViewedAt  DateTime  @default(now())
+  completedAt   DateTime?
+  secondsSpent  Int       @default(0)
+
+  student User    @relation("StudentContentProgress", fields: [studentId], references: [id], onDelete: Cascade)
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, contentId])
+  @@index([studentId, lastViewedAt])
+  @@index([contentId])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — table created in Phase 1 so Batch's back-relation resolves.
+// Fan-out and delivery tiers arrive in Phase 3 (M4).
+// ---------------------------------------------------------------------------
+
+enum NotificationType {
+  NOTES_UPLOADED
+  VIDEO_UPLOADED
+  RECORDING_UPLOADED
+  ASSIGNMENT_PUBLISHED
+  QUIZ_PUBLISHED
+  PROJECT_PUBLISHED
+  ASSIGNMENT_EVALUATED
+  PROJECT_EVALUATED
+  QUIZ_EVALUATED
+  DUE_DATE_REMINDER
+  UPCOMING_SESSION
+  ANNOUNCEMENT
+  BATCH_TRANSFERRED
+}
+
+enum NotificationAudience {
+  INDIVIDUAL
+  BATCH
+  LEARNING_PATH
+  TECH_STACK
+  ROLE
+  BROADCAST
+}
+
+/// TIER 1 — the event. Written ONCE regardless of audience size.
+model Notification {
+  id       String               @id @default(uuid())
+  type     NotificationType
+  audience NotificationAudience
+  title    String
+  body     String?
+  linkUrl  String?
+
+  /// Soft reference to the subject. Generic by design: a new notifiable thing
+  /// needs an enum value and nothing else.
+  entityType String?
+  entityId   String?
+
+  batchId        String?
+  learningPathId String?
+  techStackId    String?
+  targetRole     Role?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  batch      Batch?                  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdBy  User?                   @relation("NotificationAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients NotificationRecipient[]
+
+  @@index([type, createdAt])
+  @@index([batchId])
+}
+
+/// TIER 2 — one row per person per event, carrying read state.
+///
+/// The two-tier split is what keeps a batch announcement to 200 students a
+/// single Notification row plus 200 thin rows, rather than 200 duplicated
+/// copies of the title and body. Fan-out is written once at publish time so the
+/// student's unread query is a plain indexed lookup, never a union over
+/// batch/path/stack/role rules evaluated per request.
+model NotificationRecipient {
+  id             String @id @default(uuid())
+  notificationId String
+  userId         String
+
+  /// NULL until opened. Indexed with userId to make the unread badge a count
+  /// over one index rather than a scan.
+  readAt DateTime?
+
+  /// Delivery outcome for the email tier. Email failure never blocks the
+  /// in-app notification — the same isolation the enrollment flow uses.
+  emailSentAt        DateTime?
+  emailFailureReason String?
+
+  createdAt DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
 }

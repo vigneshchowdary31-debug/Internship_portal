@@ -34,6 +34,59 @@ export function createPrismaMock() {
       createMany: vi.fn().mockResolvedValue({ count: 0 }),
       findMany: vi.fn().mockResolvedValue([]),
     },
+
+    // --- LMS (Phase 2). Added alongside the originals rather than replacing
+    // them, so every pre-existing test keeps its exact behaviour.
+    content: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+      groupBy: vi.fn().mockResolvedValue([]),
+      delete: vi.fn(),
+    },
+    module: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
+    learningPath: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
+    batch: {
+      findUnique: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    studentBatch: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    notification: {
+      create: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    notificationRecipient: {
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    contentProgress: {
+      upsert: vi.fn(),
+      findFirst: vi.fn(),
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
+
     $transaction: vi.fn(),
   };
 }

@@ -10,7 +10,29 @@ export default defineConfig({
     seed: "npx tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
-    directUrl: process.env["DIRECT_URL"],
+    /**
+     * CLI-ONLY connection. This is NOT what the application runtime uses.
+     *
+     * Prisma 7 REMOVED the `datasource.directUrl` property — the CLI now reads
+     * exactly one `url`. Leaving `directUrl` here did not split the connections;
+     * it was silently ignored, so every `prisma migrate` / `prisma db` command
+     * ran over DATABASE_URL, i.e. the TRANSACTION pooler on port 6543.
+     *
+     * Migrations cannot work there: the Schema Engine needs one durable session
+     * (it takes a `pg_advisory_lock`), and transaction-mode pooling hands the
+     * connection back at the end of each statement. The symptom was
+     * `prisma migrate status` / `deploy` hanging forever with no error.
+     *
+     * So the CLI must point at DIRECT_URL — the SESSION pooler on 5432, which
+     * keeps one backend for the life of the session.
+     *
+     * There is deliberately NO fallback to DATABASE_URL. A missing DIRECT_URL
+     * should fail loudly with Prisma's own "url is required" error; falling
+     * back would silently restore the exact hang this replaced.
+     *
+     * The app's runtime pool is configured separately in src/config/db.ts and
+     * continues to use DATABASE_URL (6543) — see that file.
+     */
+    url: process.env["DIRECT_URL"],
   },
 });

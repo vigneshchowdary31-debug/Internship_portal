@@ -7,6 +7,7 @@ import {
   KeyRound,
   History,
   MailPlus,
+  ArrowRightLeft,
 } from 'lucide-react';
 import {
   Table,
@@ -63,6 +64,8 @@ interface UserTableProps {
   onResetPassword: (user: User) => void;
   onToggleStatus: (user: User) => void;
   onViewHistory: (user: User) => void;
+  /** Students only — moving between batches is not meaningful for instructors. */
+  onMoveBatch?: (user: User) => void;
   emptyMessage?: string;
 }
 
@@ -75,6 +78,7 @@ export function UserTable({
   onResetPassword,
   onToggleStatus,
   onViewHistory,
+  onMoveBatch,
   emptyMessage = 'No users found.',
 }: UserTableProps) {
   const isStudent = role === 'STUDENT';
@@ -188,6 +192,13 @@ export function UserTable({
                       <History className="mr-2 h-4 w-4" />
                       Enrollment History
                     </DropdownMenuItem>
+
+                    {isStudent && onMoveBatch && (
+                      <DropdownMenuItem onClick={() => onMoveBatch(user)}>
+                        <ArrowRightLeft className="mr-2 h-4 w-4" />
+                        Move to Batch
+                      </DropdownMenuItem>
+                    )}
 
                     <DropdownMenuSeparator />
 

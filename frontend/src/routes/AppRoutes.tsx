@@ -21,6 +21,9 @@ const NotFoundPage = React.lazy(() => import('../pages/NotFoundPage').then(m => 
 const UnauthorizedPage = React.lazy(() => import('../pages/UnauthorizedPage').then(m => ({ default: m.UnauthorizedPage })));
 const ChangePasswordPage = React.lazy(() => import('../pages/ChangePasswordPage').then(m => ({ default: m.ChangePasswordPage })));
 const WelcomePage = React.lazy(() => import('../pages/WelcomePage').then(m => ({ default: m.WelcomePage })));
+const CurriculumBuilder = React.lazy(() => import('../pages/lms/CurriculumBuilder').then(m => ({ default: m.CurriculumBuilder })));
+const MyCourse = React.lazy(() => import('../pages/lms/MyCourse').then(m => ({ default: m.MyCourse })));
+const BatchCurriculum = React.lazy(() => import('../pages/lms/BatchCurriculum').then(m => ({ default: m.BatchCurriculum })));
 
 const SuspenseFallback = () => (
   <div className="flex h-screen items-center justify-center text-gray-500">
@@ -50,6 +53,7 @@ export const AppRoutes = () => {
           <Route path="/admin/sessions" element={<SessionsManagement />} />
           <Route path="/admin/attendance" element={<AdminAttendance />} />
           <Route path="/admin/progress" element={<AdminProgress />} />
+          <Route path="/admin/curriculum" element={<CurriculumBuilder />} />
           <Route path="/admin/calendar" element={<PlaceholderPage title="Calendar" />} />
           <Route path="/admin/settings" element={<PlaceholderPage title="Settings" />} />
         </Route>
@@ -59,11 +63,13 @@ export const AppRoutes = () => {
           <Route path="/instructor" element={<InstructorDashboard />} />
           <Route path="/instructor/attendance" element={<InstructorAttendance />} />
           <Route path="/instructor/progress" element={<InstructorProgress />} />
+          <Route path="/instructor/curriculum" element={<BatchCurriculum />} />
         </Route>
 
         {/* Student Routes */}
         <Route element={<DashboardLayout allowedRoles={['STUDENT']} />}>
           <Route path="/student" element={<StudentDashboard />} />
+          <Route path="/student/course" element={<MyCourse />} />
         </Route>
 
         {/* Shared Routes */}

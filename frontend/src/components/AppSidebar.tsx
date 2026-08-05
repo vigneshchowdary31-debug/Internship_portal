@@ -24,7 +24,8 @@ import {
   Settings,
   LogOut,
   ClipboardCheck,
-  BarChart
+  BarChart,
+  GraduationCap
 } from 'lucide-react';
 
 const adminNavItems = [
@@ -33,6 +34,7 @@ const adminNavItems = [
   { title: "Instructors", url: "/admin/instructors", icon: UserCheck },
   { title: "Tech Stacks", url: "/admin/tech-stacks", icon: Layers },
   { title: "Batches", url: "/admin/batches", icon: BookOpen },
+  { title: "Curriculum", url: "/admin/curriculum", icon: GraduationCap },
   { title: "Sessions", url: "/admin/sessions", icon: Video },
   { title: "Attendance", url: "/admin/attendance", icon: ClipboardCheck },
   { title: "Progress", url: "/admin/progress", icon: BarChart },
@@ -42,6 +44,7 @@ const adminNavItems = [
 
 const instructorNavItems = [
   { title: "Dashboard", url: "/instructor", icon: LayoutDashboard },
+  { title: "Curriculum", url: "/instructor/curriculum", icon: GraduationCap },
   { title: "Attendance", url: "/instructor/attendance", icon: ClipboardCheck },
   { title: "Progress", url: "/instructor/progress", icon: BarChart },
   { title: "Profile", url: "/profile", icon: Settings },
@@ -49,6 +52,7 @@ const instructorNavItems = [
 
 const studentNavItems = [
   { title: "Dashboard", url: "/student", icon: LayoutDashboard },
+  { title: "My Course", url: "/student/course", icon: GraduationCap },
   { title: "Profile", url: "/profile", icon: Settings },
 ];
 

@@ -7,6 +7,7 @@ const express_1 = require("express");
 const asyncHandler_1 = require("../utils/asyncHandler");
 const db_1 = __importDefault(require("../config/db"));
 const auth_middleware_1 = require("../middlewares/auth.middleware");
+const batch_membership_service_1 = require("../services/lms/batch-membership.service");
 const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authenticate);
 // Get all batches with their tech stacks
@@ -58,16 +59,54 @@ router.post('/', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.
     });
     res.status(201).json({ success: true, data: batch });
 }));
-// Assign Students to a Batch (Overwrite)
+/**
+ * Replace a batch's student roster.
+ *
+ * Backward compatible in shape and status code, but the semantics changed with
+ * the one-batch-per-student rule: a student arriving from another batch is now
+ * MOVED rather than rejected by the unique constraint. Every add, move and
+ * removal is written to the enrollment audit trail.
+ */
 router.post('/:id/students', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
-    const { studentIds } = req.body; // array of student ids
-    const batchId = req.params.id;
-    const data = studentIds.map((studentId) => ({ studentId, batchId }));
-    await db_1.default.$transaction([
-        db_1.default.studentBatch.deleteMany({ where: { batchId } }),
-        db_1.default.studentBatch.createMany({ data, skipDuplicates: true }),
-    ]);
-    res.status(200).json({ success: true, message: 'Students assigned successfully' });
+    const { studentIds } = req.body;
+    if (!Array.isArray(studentIds)) {
+        return res.status(400).json({ success: false, message: 'studentIds must be an array' });
+    }
+    const result = await batch_membership_service_1.BatchMembershipService.setBatchRoster(req.params.id, studentIds, req.user.id);
+    const parts = [
+        result.added > 0 ? `${result.added} added` : null,
+        result.moved > 0 ? `${result.moved} moved from another batch` : null,
+        result.removed > 0 ? `${result.removed} removed` : null,
+    ].filter(Boolean);
+    res.status(200).json({
+        success: true,
+        data: result,
+        message: parts.length > 0 ? `Roster updated: ${parts.join(', ')}.` : 'No changes were needed.',
+    });
+}));
+/** Explains what assigning this student would do, before it is done. */
+router.post('/:id/students/preview', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { studentId } = req.body;
+    if (!studentId) {
+        return res.status(400).json({ success: false, message: 'studentId is required' });
+    }
+    const preview = await batch_membership_service_1.BatchMembershipService.previewAssignment(studentId, req.params.id);
+    res.status(200).json({ success: true, data: preview });
+}));
+/** Assign or move a single student. */
+router.post('/:id/students/assign', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { studentId } = req.body;
+    if (!studentId) {
+        return res.status(400).json({ success: false, message: 'studentId is required' });
+    }
+    const result = await batch_membership_service_1.BatchMembershipService.assign(studentId, req.params.id, req.user.id);
+    res.status(200).json({
+        success: true,
+        data: result,
+        message: result.moved
+            ? `Student moved to "${result.preview.targetBatch.name}".`
+            : `Student assigned to "${result.preview.targetBatch.name}".`,
+    });
 }));
 // Assign Instructors to a Batch (Overwrite)
 router.post('/:id/instructors', (0, auth_middleware_1.restrictTo)('ADMIN'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {

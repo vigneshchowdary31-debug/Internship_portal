@@ -10,7 +10,8 @@
     "gmail:auth": "tsx scripts/gmail-auth-url.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "lms:preflight": "tsx scripts/lms-preflight.ts"
   },
   "keywords": [],
   "author": "",
