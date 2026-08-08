@@ -185,15 +185,30 @@ export class ModuleService {
   static async remove(id: string) {
     const module = await prisma.module.findUnique({
       where: { id },
-      include: { _count: { select: { contents: true } } },
+      include: { _count: { select: { contents: true, assignments: true, quizzes: true } } },
     });
     if (!module) throw new AppError('Module not found', 404);
 
-    // Content cascades. Deleting a populated module silently would be a
-    // surprising amount of destruction from one click.
-    if (module._count.contents > 0) {
+    // Everything below a module cascades. Deleting a populated module silently
+    // would be a surprising amount of destruction from one click.
+    //
+    // Assignments and quizzes are counted here as well as content (Phase 3),
+    // because they are the SAME data-loss path one level up: a module holding
+    // no content but one assignment would otherwise delete cleanly, cascade to
+    // the assignment, and cascade again to every submission against it. The
+    // guard in AssignmentService.remove is bypassed entirely by that route.
+    const { contents, assignments, quizzes } = module._count;
+    const total = contents + assignments + quizzes;
+
+    if (total > 0) {
+      const parts = [
+        contents > 0 ? `${contents} content item(s)` : null,
+        assignments > 0 ? `${assignments} assignment(s)` : null,
+        quizzes > 0 ? `${quizzes} quiz(zes)` : null,
+      ].filter(Boolean);
+
       throw new AppError(
-        `"${module.name}" still contains ${module._count.contents} item(s). Delete or move them first.`,
+        `"${module.name}" still contains ${parts.join(', ')}. Delete or move them first.`,
         400
       );
     }

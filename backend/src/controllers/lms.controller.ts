@@ -11,49 +11,27 @@ import { CurriculumProgressService } from '../services/lms/curriculum-progress.s
 import { StorageService } from '../services/storage/storage.service';
 import {
   assertCanAccessBatch,
+  assertCanReadPath as assertUserCanReadPath,
   assertCanWriteCurriculum,
+  buildVisibilityContext as buildContextForUser,
   resolveReadContext,
 } from '../policies/lms.policy';
 import prisma from '../config/db';
 import type { VisibilityContext } from '../services/lms/visibility.service';
 
 /**
- * Builds the visibility context for the current request.
+ * Request-shaped wrappers over the policy layer.
  *
- * Admins and instructors see drafts and unreleased items because they author
- * and review them; students never do. The batch whose overrides apply is the
- * student's own, or — for an instructor — one they explicitly asked for and are
- * assigned to.
+ * The rules themselves moved to lms.policy.ts in Phase 3, so the assignment
+ * routes consult the same implementation rather than a second copy. These
+ * remain so every call site below reads exactly as it did.
  */
-async function buildVisibilityContext(req: Request): Promise<VisibilityContext> {
-  const user = req.user!;
-  const requestedBatchId = (req.query.batchId as string | undefined) || undefined;
-
-  if (user.role === 'ADMIN') {
-    return { batchId: requestedBatchId ?? null, includeUnpublished: true };
-  }
-
-  if (user.role === 'INSTRUCTOR') {
-    if (requestedBatchId) await assertCanAccessBatch(user, requestedBatchId);
-    return { batchId: requestedBatchId ?? null, includeUnpublished: true };
-  }
-
-  const context = await resolveReadContext(user);
-  return { batchId: context.effectiveBatchId, includeUnpublished: false };
+function buildVisibilityContext(req: Request): Promise<VisibilityContext> {
+  return buildContextForUser(req.user!, (req.query.batchId as string | undefined) || undefined);
 }
 
-/**
- * Students may only read curriculum belonging to the path their batch runs.
- * Returning 403 rather than an empty list keeps the boundary unambiguous.
- */
-async function assertCanReadPath(req: Request, learningPathId: string): Promise<void> {
-  const user = req.user!;
-  if (user.role === 'ADMIN') return;
-
-  const context = await resolveReadContext(user);
-  if (!context.learningPathIds || context.learningPathIds.includes(learningPathId)) return;
-
-  throw new AppError('You do not have access to this curriculum.', 403);
+function assertCanReadPath(req: Request, learningPathId: string): Promise<void> {
+  return assertUserCanReadPath(req.user!, learningPathId);
 }
 
 // --- Learning paths ---------------------------------------------------------
@@ -309,12 +287,28 @@ export const getMyCurriculum = asyncHandler(async (req: Request, res: Response) 
     console.error('[lms] Announcing due releases failed:', error?.message || error);
   }
 
-  const [modules, progress] = await Promise.all([
+  const studentContext = { batchId: membership.batch.id, includeUnpublished: false };
+
+  const [modules, progress, assignmentProgress, quizProgress] = await Promise.all([
     ModuleService.listForPath(membership.batch.learningPathId, false),
-    CurriculumProgressService.forLearningPath(req.user!.id, membership.batch.learningPathId, {
-      batchId: membership.batch.id,
-      includeUnpublished: false,
-    }),
+    CurriculumProgressService.forLearningPath(
+      req.user!.id,
+      membership.batch.learningPathId,
+      studentContext
+    ),
+    // Phase 3 M2/M3: reported ALONGSIDE content progress, never folded into it.
+    // Merging them would silently move the percentage every existing screen
+    // already displays.
+    CurriculumProgressService.assignmentsForLearningPath(
+      req.user!.id,
+      membership.batch.learningPathId,
+      studentContext
+    ),
+    CurriculumProgressService.quizzesForLearningPath(
+      req.user!.id,
+      membership.batch.learningPathId,
+      studentContext
+    ),
   ]);
 
   // Progress is merged onto each module here rather than fetched per card by
@@ -331,6 +325,8 @@ export const getMyCurriculum = asyncHandler(async (req: Request, res: Response) 
         progress: progressByModule.get(m.id) ?? { total: 0, completed: 0, percent: 0 },
       })),
       progress: progress.overall,
+      assignmentProgress,
+      quizProgress,
     },
   });
 });

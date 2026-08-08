@@ -1,5 +1,10 @@
 import prisma from '../../config/db';
-import { contentVisibilityWhere, type VisibilityContext } from './visibility.service';
+import {
+  assignmentVisibilityWhere,
+  contentVisibilityWhere,
+  quizVisibilityWhere,
+  type VisibilityContext,
+} from './visibility.service';
 
 /**
  * Progress roll-ups over ContentProgress.
@@ -127,6 +132,131 @@ export class CurriculumProgressService {
     }
 
     return { studentCount, modules: [...byModule.values()] };
+  }
+
+  /**
+   * Assignment progress for one student across a learning path (Phase 3, M2).
+   *
+   * DERIVED, like everything else here — and it needs no write path at all,
+   * because the Submission row IS the progress record. "Update progress when an
+   * assignment is submitted" is satisfied by there being nothing to update: the
+   * next read counts the new row. A stored counter would need invalidating
+   * every time an assignment is published, withdrawn, made batch-specific or
+   * moved into a hidden module, and the first missed invalidation shows a
+   * student a number they cannot refresh away.
+   *
+   * Returned ALONGSIDE content progress, never folded into it. Merging the two
+   * would silently move the percentage every existing Phase 1/2 screen displays.
+   *
+   * The denominator is the assignments this student can actually SEE, resolved
+   * through the shared visibility builder — counting drafts or another batch's
+   * work would put 100% out of reach.
+   */
+  static async assignmentsForLearningPath(
+    studentId: string,
+    learningPathId: string,
+    context: VisibilityContext
+  ): Promise<{ total: number; submitted: number; late: number; graded: number; percent: number; averageScorePercent: number | null }> {
+    const visible = assignmentVisibilityWhere(context);
+    const where = { AND: [{ learningPathId }, visible] };
+
+    const [total, submissions] = await Promise.all([
+      prisma.assignment.count({ where }),
+      prisma.submission.findMany({
+        where: { studentId, assignment: where },
+        select: {
+          isLate: true,
+          marks: true,
+          assignment: { select: { maxMarks: true } },
+        },
+      }),
+    ]);
+
+    const submitted = submissions.length;
+    const late = submissions.filter((s) => s.isLate).length;
+    const marked = submissions.filter((s) => s.marks !== null);
+
+    // Averaged as a percentage of each assignment's own maximum, not as raw
+    // marks: a 10-mark quiz and a 100-mark project are not comparable totals,
+    // and summing them weights the project ten times heavier by accident.
+    const averageScorePercent =
+      marked.length === 0
+        ? null
+        : Math.round(
+            marked.reduce((sum, s) => sum + (s.marks! / s.assignment.maxMarks) * 100, 0) /
+              marked.length
+          );
+
+    return {
+      total,
+      submitted,
+      late,
+      graded: marked.length,
+      percent: toPercent(submitted, total),
+      averageScorePercent,
+    };
+  }
+
+  /**
+   * Quiz progress for one student across a learning path (Phase 3, M3).
+   *
+   * DERIVED from the Attempt table, exactly like assignment progress is derived
+   * from Submission — there is no write path and nothing to invalidate, because
+   * the Attempt row IS the record of completion.
+   *
+   * A quiz counts as attempted once the student has any CLOSED attempt on it
+   * (`submittedAt` non-null). An open attempt is someone mid-quiz, not someone
+   * who has done it, and counting it would let a student reach 100% by opening
+   * every quiz and walking away.
+   *
+   * The best score is used where a quiz allows several attempts. Averaging
+   * attempts would punish a student for practising, which is the opposite of
+   * what re-attempts are offered for.
+   */
+  static async quizzesForLearningPath(
+    studentId: string,
+    learningPathId: string,
+    context: VisibilityContext
+  ): Promise<{
+    total: number;
+    attempted: number;
+    percent: number;
+    averageScorePercent: number | null;
+  }> {
+    const visible = quizVisibilityWhere(context);
+    const where = { AND: [{ learningPathId }, visible] };
+
+    const [total, attempts] = await Promise.all([
+      prisma.quiz.count({ where }),
+      prisma.attempt.findMany({
+        where: { studentId, submittedAt: { not: null }, quiz: where },
+        select: { quizId: true, score: true, totalMarks: true },
+      }),
+    ]);
+
+    // Best percentage per quiz, then averaged across quizzes — not a mean over
+    // all attempts, which would weight a heavily-retried quiz more than a
+    // one-shot one.
+    const bestByQuiz = new Map<string, number>();
+    for (const a of attempts) {
+      if (a.score === null || !a.totalMarks) continue;
+      const percent = (a.score / a.totalMarks) * 100;
+      const current = bestByQuiz.get(a.quizId);
+      if (current === undefined || percent > current) bestByQuiz.set(a.quizId, percent);
+    }
+
+    const attempted = new Set(attempts.map((a) => a.quizId)).size;
+    const scored = [...bestByQuiz.values()];
+
+    return {
+      total,
+      attempted,
+      percent: toPercent(attempted, total),
+      averageScorePercent:
+        scored.length === 0
+          ? null
+          : Math.round(scored.reduce((sum, p) => sum + p, 0) / scored.length),
+    };
   }
 
   /**

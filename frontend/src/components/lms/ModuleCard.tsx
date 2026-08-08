@@ -20,12 +20,16 @@ import {
   EyeOff,
   Clock,
   FileText,
+  ClipboardList,
   Loader2,
 } from 'lucide-react';
 import { SortableList, SortableItem } from './SortableList';
 import { ContentRow } from './ContentRow';
 import { ContentFormDialog, type ContentFormValues } from './ContentFormDialog';
+import { AssignmentRow } from './AssignmentRow';
+import { AssignmentFormDialog } from './AssignmentFormDialog';
 import { lmsApi, type LmsContent, type LmsModule } from '@/services/lms';
+import { assignmentsApi, type Assignment, type AssignmentPayload } from '@/services/assignments';
 import { cn } from '@/lib/utils';
 
 const DIFFICULTY_STYLES: Record<string, string> = {
@@ -76,6 +80,8 @@ export function ModuleCard({
   }, [focused]);
   const [isContentFormOpen, setIsContentFormOpen] = useState(false);
   const [editingContent, setEditingContent] = useState<LmsContent | null>(null);
+  const [isAssignmentFormOpen, setIsAssignmentFormOpen] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
 
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -86,10 +92,50 @@ export function ModuleCard({
     enabled: expanded,
   });
 
+  // Assignments live on their own endpoint, so they are their own query. Both
+  // are lazy on first expand for the same reason: a 12-module curriculum should
+  // not issue 24 requests on page load.
+  const { data: assignments = [], isLoading: loadingAssignments } = useQuery({
+    queryKey: ['lms', 'assignments', module.id],
+    queryFn: () => assignmentsApi.listForModule(module.id),
+    enabled: expanded,
+  });
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['lms', 'contents', module.id] });
     queryClient.invalidateQueries({ queryKey: ['lms', 'modules'] });
   };
+
+  const invalidateAssignments = () =>
+    queryClient.invalidateQueries({ queryKey: ['lms', 'assignments', module.id] });
+
+  const openAssignmentForm = (assignment: Assignment | null) => {
+    setEditingAssignment(assignment);
+    setExpanded(true);
+    setIsAssignmentFormOpen(true);
+  };
+
+  const createAssignment = useMutation({
+    mutationFn: (values: AssignmentPayload) => assignmentsApi.create(module.id, values),
+    onSuccess: () => {
+      invalidateAssignments();
+      setIsAssignmentFormOpen(false);
+      toast.success('Assignment created', 'It is a draft until you publish it.');
+    },
+    onError: (err) => toast.error('Could not add assignment', errorMessage(err)),
+  });
+
+  const updateAssignment = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: AssignmentPayload }) =>
+      assignmentsApi.update(id, values),
+    onSuccess: () => {
+      invalidateAssignments();
+      setIsAssignmentFormOpen(false);
+      setEditingAssignment(null);
+      toast.success('Assignment updated');
+    },
+    onError: (err) => toast.error('Could not save changes', errorMessage(err)),
+  });
 
   const createContent = useMutation({
     mutationFn: (values: ContentFormValues) => lmsApi.createContent(module.id, values),
@@ -195,6 +241,14 @@ export function ModuleCard({
               <FileText className="h-3 w-3" />
               {module._count.contents} item{module._count.contents === 1 ? '' : 's'}
             </span>
+            {/* Only once expanded — the count comes from the assignments query,
+                which does not run until then. */}
+            {expanded && assignments.length > 0 && (
+              <span className="flex items-center gap-1">
+                <ClipboardList className="h-3 w-3" />
+                {assignments.length} assignment{assignments.length === 1 ? '' : 's'}
+              </span>
+            )}
             {duration && (
               <span className="flex items-center gap-1">
                 <Clock className="h-3 w-3" />
@@ -227,6 +281,10 @@ export function ModuleCard({
               >
                 <Plus className="mr-2 h-4 w-4" />
                 Add Content
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openAssignmentForm(null)}>
+                <ClipboardList className="mr-2 h-4 w-4" />
+                Add Assignment
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onEdit(module)}>
                 <Pencil className="mr-2 h-4 w-4" />
@@ -307,6 +365,63 @@ export function ModuleCard({
               )}
             </>
           )}
+
+          {/* Assignments — a separate backend entity, shown in the same module
+              so an admin reads one curriculum rather than two systems. */}
+          <div className="mt-4 border-t pt-3">
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <ClipboardList className="h-3.5 w-3.5" />
+              Assignments
+            </h4>
+
+            {loadingAssignments ? (
+              <div className="flex items-center justify-center gap-2 py-4 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading assignments…
+              </div>
+            ) : assignments.length === 0 ? (
+              <div className="py-4 text-center">
+                <p className="text-sm text-gray-500">No assignments in this module yet.</p>
+                {canEdit && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => openAssignmentForm(null)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add an assignment
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="mt-2 space-y-2">
+                  {assignments.map((assignment) => (
+                    <AssignmentRow
+                      key={assignment.id}
+                      assignment={assignment}
+                      canEdit={canEdit}
+                      onEdit={openAssignmentForm}
+                      onChanged={invalidateAssignments}
+                    />
+                  ))}
+                </div>
+
+                {canEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2 w-full justify-start text-gray-500"
+                    onClick={() => openAssignmentForm(null)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add assignment
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -321,6 +436,20 @@ export function ModuleCard({
         onSubmit={(values) => {
           if (editingContent) updateContent.mutate({ id: editingContent.id, values });
           else createContent.mutate(values);
+        }}
+      />
+
+      <AssignmentFormDialog
+        open={isAssignmentFormOpen}
+        onOpenChange={(open) => {
+          setIsAssignmentFormOpen(open);
+          if (!open) setEditingAssignment(null);
+        }}
+        initialData={editingAssignment}
+        isLoading={createAssignment.isPending || updateAssignment.isPending}
+        onSubmit={(values) => {
+          if (editingAssignment) updateAssignment.mutate({ id: editingAssignment.id, values });
+          else createAssignment.mutate(values);
         }}
       />
     </div>

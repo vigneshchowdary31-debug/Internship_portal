@@ -8,6 +8,11 @@ import attendanceRoutes from './attendance.routes';
 import progressRoutes from './progress.routes';
 import googleRoutes from './google.routes';
 import lmsRoutes from './lms.routes';
+import assignmentRoutes from './assignment.routes';
+import submissionRoutes from './submission.routes';
+import { quizRouter, attemptRouter } from './quiz.routes';
+import analyticsRoutes from './analytics.routes';
+import instructorRoutes from './instructor.routes';
 
 const router = Router();
 
@@ -20,5 +25,11 @@ router.use('/attendance', attendanceRoutes);
 router.use('/progress', progressRoutes);
 router.use('/google', googleRoutes);
 router.use('/lms', lmsRoutes);
+router.use('/assignments', assignmentRoutes);
+router.use('/submissions', submissionRoutes);
+router.use('/quizzes', quizRouter);
+router.use('/attempts', attemptRouter);
+router.use('/analytics', analyticsRoutes);
+router.use('/instructor', instructorRoutes);
 
 export default router;

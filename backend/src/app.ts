@@ -6,12 +6,18 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 
 import { errorHandler } from './middlewares/error.middleware';
+import { requestContext } from './middlewares/requestContext.middleware';
+import systemRoutes from './routes/system.routes';
 import routes from './routes';
 
 const app = express();
 
 // Trust proxy for Render deployment (fixes rate limit warnings)
 app.set('trust proxy', 1);
+
+// First in the chain: everything after this — including the error handler —
+// can correlate its output by requestId.
+app.use(requestContext);
 
 // Security Middlewares
 app.use(helmet());
@@ -21,6 +27,17 @@ app.use(
     credentials: true,
   })
 );
+
+/**
+ * Operational health, mounted BEFORE the rate limiter.
+ *
+ * Not an optimisation — a correctness fix. A probe polling every 10 seconds is
+ * 90 requests per 15 minutes against a 100-request budget shared with every
+ * other call from that IP, so behind the limiter the health check would start
+ * returning 429 under exactly the load it exists to report on, and an
+ * orchestrator would cycle a healthy instance.
+ */
+app.use('/api/system', systemRoutes);
 
 // Rate Limiting
 const limiter = rateLimit({

@@ -127,6 +127,25 @@ export interface MyCurriculum {
   modules: LmsModule[];
   /** Weighted across every visible item, not an average of module percentages. */
   progress?: ModuleProgress;
+  /**
+   * Assignment and quiz completion, returned ALONGSIDE `progress` rather than
+   * folded into it (Phase 3 M2/M3). Both are derived server-side from the
+   * Submission and Attempt tables — there is no stored counter to go stale.
+   */
+  assignmentProgress?: {
+    total: number;
+    submitted: number;
+    late: number;
+    graded: number;
+    percent: number;
+    averageScorePercent: number | null;
+  };
+  quizProgress?: {
+    total: number;
+    attempted: number;
+    percent: number;
+    averageScorePercent: number | null;
+  };
 }
 
 // --- Phase 2: search, notifications, progress -------------------------------
@@ -312,17 +331,45 @@ function pruneEmpty<T extends object>(obj: T): Partial<T> {
 }
 
 /**
- * Uploads a file straight to the storage provider.
+ * What the provider actually returned for one uploaded file.
  *
- * The file never touches our own server: we ask for a signature, POST the file
- * directly to the provider, then register the result. That keeps the API's 10 kB
- * JSON body limit untouched and costs the backend zero bandwidth.
+ * These are the values the SERVER needs to be able to delete the file later, so
+ * they are carried through verbatim rather than re-derived:
+ *
+ *   - `providerKey` is the public_id Cloudinary RETURNED. For `raw` assets it
+ *     carries the extension; the key we signed does not.
+ *   - `resourceType` is Cloudinary's own classification. It cannot be inferred
+ *     from the MIME type — Cloudinary files PDFs as `image`, not `raw`.
  */
-export async function uploadFile(
+export interface ProviderUpload {
+  providerKey: string;
+  url: string;
+  resourceType: 'image' | 'raw' | 'video';
+  format?: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
+ * Signs, then uploads a file straight to the storage provider — and stops there.
+ *
+ * The file never touches our own server: we ask for a signature and POST the
+ * file directly to the provider. That keeps the API's 10 kB JSON body limit
+ * untouched and costs the backend zero bandwidth.
+ *
+ * Registering the result is a SEPARATE step, because the two callers register
+ * differently: content calls `/lms/uploads/confirm` itself (below), while a
+ * submission hands these values to `POST /submissions`, which calls
+ * `confirmUpload()` server-side. Splitting the function is what lets the
+ * submission flow avoid creating a MediaAsset for work that then fails its own
+ * validation.
+ */
+export async function uploadToProvider(
   file: File,
   purpose: 'content' | 'submission',
   onProgress?: (percent: number) => void
-): Promise<{ id: string; url: string; originalFilename: string }> {
+): Promise<ProviderUpload> {
   const ticket = await api
     .post('/lms/uploads/sign', {
       filename: file.name,
@@ -368,19 +415,45 @@ export async function uploadFile(
   const url = uploaded.secure_url || uploaded.url;
   if (!url) throw new Error('The storage provider did not return a file URL.');
 
+  // `auto` is an UPLOAD-only convenience — the destroy endpoint rejects it with
+  // a 400, so a file registered under it could never be deleted. Cloudinary
+  // resolves it to a real type in the response; if it somehow did not, failing
+  // here is far better than storing an undeletable asset.
+  const resourceType = uploaded.resource_type;
+  if (resourceType !== 'image' && resourceType !== 'raw' && resourceType !== 'video') {
+    throw new Error(
+      `The storage provider returned an unusable file type ("${resourceType ?? 'none'}"). Please try again.`
+    );
+  }
+
+  return {
+    // The public_id Cloudinary RETURNED, not the one we signed: for `raw`
+    // assets (DOCX/PPTX/ZIP) Cloudinary appends the extension, and storing
+    // the signed key makes every later delete silently do nothing.
+    providerKey: uploaded.public_id ?? ticket.providerKey,
+    url,
+    resourceType,
+    format: uploaded.format,
+    originalFilename: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    sizeBytes: file.size,
+  };
+}
+
+/**
+ * Uploads a file and registers it as a MediaAsset in one step.
+ *
+ * The content authoring path. Submissions deliberately do NOT use this — see
+ * `uploadToProvider`.
+ */
+export async function uploadFile(
+  file: File,
+  purpose: 'content' | 'submission',
+  onProgress?: (percent: number) => void
+): Promise<{ id: string; url: string; originalFilename: string }> {
+  const uploaded = await uploadToProvider(file, purpose, onProgress);
+
   return api
-    .post('/lms/uploads/confirm', {
-      // The public_id Cloudinary RETURNED, not the one we signed: for `raw`
-      // assets (DOCX/PPTX/ZIP) Cloudinary appends the extension, and storing
-      // the signed key makes every later delete silently do nothing.
-      providerKey: uploaded.public_id ?? ticket.providerKey,
-      resourceType: uploaded.resource_type,
-      format: uploaded.format,
-      url,
-      originalFilename: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      purpose,
-    })
+    .post('/lms/uploads/confirm', { ...uploaded, purpose })
     .then(unwrap<{ id: string; url: string; originalFilename: string }>);
 }

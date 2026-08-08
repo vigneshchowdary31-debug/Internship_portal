@@ -86,6 +86,13 @@ model User {
   authoredNotifications Notification[]          @relation("NotificationAuthor")
   notifications         NotificationRecipient[] @relation("NotificationRecipient")
 
+  // --- LMS back-relations (Phase 3).
+  authoredAssignments Assignment[] @relation("AssignmentAuthor")
+  submissions         Submission[] @relation("StudentSubmissions")
+  gradedSubmissions   Submission[] @relation("SubmissionGrader")
+  authoredQuizzes     Quiz[]       @relation("QuizAuthor")
+  quizAttempts        Attempt[]    @relation("StudentAttempts")
+
   @@index([role])
   @@index([techStackId])
   @@index([status, role])
@@ -226,6 +233,8 @@ model Batch {
   sessions          Session[]
   contents          Content[]
   notifications     Notification[]
+  assignments       Assignment[]
+  quizzes           Quiz[]
 
   @@index([techStackId])
   @@index([learningPathId])
@@ -375,10 +384,12 @@ model LearningPath {
   clones     LearningPath[] @relation("PathLineage")
   createdBy  User?          @relation("PathAuthor", fields: [createdById], references: [id], onDelete: SetNull)
 
-  modules  Module[]
-  contents Content[]
+  modules     Module[]
+  contents    Content[]
+  assignments Assignment[]
+  quizzes     Quiz[]
   /// Restrict: refuse to delete a path a cohort is actively running.
-  batches  Batch[]
+  batches     Batch[]
 
   @@unique([techStackId, version])
   @@index([techStackId, status])
@@ -429,6 +440,8 @@ model Module {
   thumbnail    MediaAsset?  @relation("ModuleThumbnail", fields: [thumbnailAssetId], references: [id], onDelete: SetNull)
 
   contents      Content[]
+  assignments   Assignment[]
+  quizzes       Quiz[]
   prerequisites ModulePrerequisite[] @relation("ModuleRequires")
   requiredBy    ModulePrerequisite[] @relation("ModuleRequiredBy")
 
@@ -573,6 +586,10 @@ model MediaAsset {
   uploadedBy User?     @relation("AssetUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
   contents   Content[]
 
+  /// Restrict on the far side — see Submission.asset. Student work is never
+  /// silently detached from its file.
+  submissions Submission[] @relation("SubmissionArtifact")
+
   @@unique([provider, providerKey])
   @@index([uploadedById])
 }
@@ -692,4 +709,296 @@ model NotificationRecipient {
   @@unique([notificationId, userId])
   @@index([userId, readAt])
   @@index([userId, createdAt])
+}
+
+// ===========================================================================
+// LMS — Phase 3, Module 1: assignments
+// ===========================================================================
+
+/// Graded work attached to a module.
+///
+/// Deliberately NOT a `ContentType`. Content is material a student consumes and
+/// whose progress is a completion flag; an assignment is work a student returns,
+/// carrying a deadline, a mark and a submission of its own. Modelling it as
+/// content would have meant nullable deadline/maxMarks columns on every PDF row
+/// and a `type == ASSIGNMENT` branch in each of the Phase 1/2 content paths.
+///
+/// Visibility mirrors Content exactly — `scope` + `batchId`, resolved by the
+/// shared resolver in visibility.service.ts — so a batch can be set work the
+/// rest of the cohort never sees, using the rule that already exists.
+model Assignment {
+  id       String @id @default(uuid())
+  moduleId String
+  /// Denormalised one hop up from Module, for the same reason Content carries
+  /// it: the student-facing visibility query runs on every page load and should
+  /// not need a join to know which curriculum an item belongs to.
+  learningPathId String
+
+  title String
+  /// Rich text (HTML from the authoring editor). Stored as-is and escaped at
+  /// every render site — the notification e-mail path already escapes.
+  description String
+  maxMarks    Int
+  deadline    DateTime
+
+  /// Draft/publish rather than Content's three-state `status`: an assignment is
+  /// never "archived" — it is either being written or it is set. Publishing is
+  /// the event students are notified about, and the transition is one-way per
+  /// notification (see AssignmentService.setPublished).
+  isPublished Boolean   @default(false)
+  /// Stamped on the false -> true transition. Distinguishes "drafted long ago,
+  /// published today" from "created today", which `createdAt` alone cannot.
+  publishedAt DateTime?
+
+  // --- Visibility. Same two fields, same meaning, as Content. ---
+  scope   VisibilityScope @default(LEARNING_PATH)
+  batchId String?
+
+  /// Whether a student may replace work they have already handed in.
+  ///
+  /// Per-assignment rather than global: a take-home project wants revisions, a
+  /// timed test does not. Defaults to true because refusing a second attempt is
+  /// the surprising behaviour, and the existing rows created before this column
+  /// existed were all set under that assumption.
+  allowResubmission Boolean @default(true)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  batch        Batch?       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// SetNull, matching every other authored LMS row: removing the admin who set
+  /// the work must not delete the work.
+  createdBy    User?        @relation("AssignmentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  submissions Submission[]
+
+  @@index([moduleId, isPublished, deadline])
+  @@index([learningPathId, isPublished])
+  @@index([batchId])
+  @@index([deadline])
+}
+
+/// A student's handed-in work for one assignment.
+///
+/// THE FILE IS A MediaAsset REFERENCE, not inline publicId/url/resourceType
+/// columns. That is the single most important decision in this model, and it
+/// was anticipated in Phase 1 — storage.service.ts already documents "a
+/// submission artifact is Restrict, and student work is never silently detached
+/// from its file".
+///
+/// Copying the provider fields onto this table would have meant a second file
+/// record with a second lifecycle: a second place to remember that `public_id`
+/// must be the value Cloudinary RETURNED (raw assets carry the extension), a
+/// second place to store `resourceType` (destroy rejects `auto`, and PDF is
+/// `image`, not `raw`), and a second delete path that would have to re-learn
+/// both. The API still returns publicId/resourceType/format/fileUrl — they are
+/// read through the relation, so the response shape is unchanged while the
+/// storage rules stay in exactly one place.
+///
+/// One row per (assignment, student): resubmission REPLACES the artifact rather
+/// than appending an attempt, which is what makes "the submission" for grading
+/// unambiguous. `attemptCount` keeps the fact that it happened.
+model Submission {
+  id           String @id @default(uuid())
+  assignmentId String
+  studentId    String
+
+  assetId String
+
+  submittedAt DateTime @default(now())
+
+  /// Whether `submittedAt` fell after the assignment's deadline.
+  ///
+  /// Stored, not derived — but kept truthful: extending a deadline recomputes
+  /// it for every affected submission (see AssignmentService.update). A stored
+  /// flag that silently disagreed with the deadline it was derived from would
+  /// be worse than either alternative, so the write path owns keeping it right.
+  isLate Boolean
+
+  /// How many times this student has handed in. The only trace a resubmission
+  /// happened, since the previous artifact is replaced rather than kept.
+  attemptCount Int @default(1)
+
+  // --- Evaluation. Null until an instructor marks the work. ---
+  marks      Int?
+  feedback   String?
+  gradedAt   DateTime?
+  gradedById String?
+
+  /// RESTRICT, not Cascade.
+  ///
+  /// Cascade was the original choice and it was wrong: deleting one assignment
+  /// silently destroyed every submission against it — the files, the marks and
+  /// the feedback — and orphaned the Cloudinary objects somewhere even the
+  /// admin orphan report could not see, because that report only lists assets
+  /// that still have a MediaAsset row.
+  ///
+  /// AssignmentService.remove and ModuleService.remove both refuse this in the
+  /// application layer with a readable message, and they remain the paths a
+  /// user actually meets. This constraint is the backstop underneath them: a
+  /// raw SQL delete, a Prisma Studio click, a seed script or a future code path
+  /// that forgets the guard now hits a foreign-key violation instead of
+  /// quietly erasing student work.
+  ///
+  /// Matches `asset` below, which has been Restrict since Phase 3 M2 for the
+  /// same reason — student work is never silently detached from its evidence.
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  student    User       @relation("StudentSubmissions", fields: [studentId], references: [id], onDelete: Cascade)
+  /// Restrict: deleting the file out from under submitted work is refused
+  /// outright. Content uses SetNull because a missing file degrades a card to a
+  /// placeholder; a submission with no artifact is not degraded, it is evidence
+  /// that has gone missing.
+  asset      MediaAsset @relation("SubmissionArtifact", fields: [assetId], references: [id], onDelete: Restrict)
+  gradedBy   User?      @relation("SubmissionGrader", fields: [gradedById], references: [id], onDelete: SetNull)
+
+  /// One current submission per student per assignment.
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId, isLate])
+  @@index([studentId, submittedAt])
+  @@index([assetId])
+}
+
+// ===========================================================================
+// LMS — Phase 3, Module 3: quizzes
+// ===========================================================================
+
+/// A timed, auto-marked MCQ assessment attached to a module.
+///
+/// Visibility columns are IDENTICAL to Assignment's (`isPublished`, `scope`,
+/// `batchId`, plus the denormalised `learningPathId`) — deliberately, so both
+/// share one implementation in visibility.service.ts rather than two that
+/// merely look alike.
+model Quiz {
+  id       String @id @default(uuid())
+  moduleId String
+  /// Denormalised one hop up from Module, matching Content and Assignment: the
+  /// student-facing visibility query should not need a join to know which
+  /// curriculum an item belongs to.
+  learningPathId String
+
+  title       String
+  description String?
+  /// Minutes. The attempt's own deadline is pinned at start time (see
+  /// Attempt.expiresAt) so changing this never moves a running clock.
+  timeLimit   Int
+
+  isPublished Boolean   @default(false)
+  publishedAt DateTime?
+
+  // --- Visibility. Same two fields, same meaning, as Content and Assignment.
+  scope   VisibilityScope @default(LEARNING_PATH)
+  batchId String?
+
+  /// How many completed attempts a student may make. NULL = unlimited.
+  ///
+  /// An Int rather than Assignment's `allowResubmission` boolean because a quiz
+  /// is normally capped at a small number rather than switched on or off, and
+  /// `maxAttempts = 1` already expresses the boolean's "off".
+  maxAttempts Int?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id], onDelete: Cascade)
+  batch        Batch?       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("QuizAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  questions Question[]
+  attempts  Attempt[]
+
+  @@index([moduleId, isPublished])
+  @@index([learningPathId, isPublished])
+  @@index([batchId])
+}
+
+/// One multiple-choice question.
+///
+/// `correctAnswer` is the single most sensitive column in the LMS: leaking it
+/// into a student-facing response hands out the whole answer key. It is
+/// excluded by QUIZ_SELECT_STUDENT in quiz.service.ts and never selected on a
+/// student path.
+model Question {
+  id       String @id @default(uuid())
+  quizId   String
+  question String
+
+  /// The choices, as a JSON array of strings. Json rather than a child table
+  /// because options have no identity of their own — they are never referenced,
+  /// reordered independently, or queried across questions. The answer is stored
+  /// as the option's VALUE, so a Json array is the whole model.
+  options Json
+  /// Must be one of `options`; enforced on every write in quiz.service.ts.
+  correctAnswer String
+  marks         Int @default(1)
+
+  /// Render order. Without it Postgres is free to return questions in any
+  /// order, and a quiz whose questions shuffle between page loads looks broken.
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([quizId, position])
+}
+
+/// One student's run at a quiz.
+///
+/// Created by `start` with no answers, completed by `submit`. That is why
+/// `answers`, `score`, `totalMarks` and `submittedAt` are all nullable while
+/// the attempt is open — an in-progress attempt has none of them, and modelling
+/// them as required would mean inventing placeholder values that later read as
+/// a real score of zero.
+model Attempt {
+  id        String @id @default(uuid())
+  quizId    String
+  studentId String
+
+  /// `{ questionId: selectedOption }`, exactly as submitted. Kept so a mark can
+  /// be explained back to the student rather than asserted.
+  answers Json?
+
+  /// Marked once, at submission. Stored rather than derived because the
+  /// question set can legitimately change afterwards — `totalMarks` is the
+  /// snapshot that keeps an old attempt's score meaningful against the quiz it
+  /// was actually taken on. This is an evaluation record, not an aggregate.
+  score      Int?
+  totalMarks Int?
+
+  startedAt DateTime @default(now())
+  /// NULL while the attempt is open. The presence of this value is what makes
+  /// "submitting without starting" and "submitting twice" both detectable.
+  submittedAt DateTime?
+
+  /// startedAt + the quiz's timeLimit, pinned at start.
+  ///
+  /// Stored, not computed on read: an admin editing `Quiz.timeLimit` mid-attempt
+  /// must not move the clock under a student who is already running against it.
+  expiresAt DateTime
+
+  /// True when the server finalised an abandoned attempt at its expiry rather
+  /// than the student submitting. NOT derivable — an auto-finalised attempt and
+  /// one submitted at the last instant look identical otherwise, and the
+  /// difference is exactly what explains a zero.
+  autoSubmitted Boolean @default(false)
+
+  /// RESTRICT, not Cascade.
+  ///
+  /// An attempt is a student's exam record: what they answered, when, and what
+  /// it scored. Cascade meant deleting a quiz erased every one of them — the
+  /// same defect Submission.assignmentId had, with the same fix.
+  ///
+  /// QuizService.remove already refuses while attempts exist, and gives a
+  /// readable reason. This constraint is the backstop underneath it, for the
+  /// raw SQL delete, the Prisma Studio click and the seed script that never go
+  /// through the service.
+  quiz    Quiz @relation(fields: [quizId], references: [id], onDelete: Restrict)
+  student User @relation("StudentAttempts", fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([quizId, studentId])
+  @@index([studentId, submittedAt])
 }

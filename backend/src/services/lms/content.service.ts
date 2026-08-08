@@ -3,6 +3,7 @@ import { AppError } from '../../utils/AppError';
 import { assertValidReorder, nextPosition, toPositionUpdates } from './ordering.service';
 import { contentVisibilityWhere, type VisibilityContext } from './visibility.service';
 import { NotificationService } from './notification.service';
+import { assertBatchOnPath } from './batch-scope';
 
 export const CONTENT_SELECT = {
   id: true,
@@ -157,19 +158,15 @@ export class ContentService {
     });
   }
 
-  /** A batch may only receive content from the path it is actually running. */
+  /**
+   * A batch may only receive content from the path it is actually running.
+   *
+   * The check moved to ./batch-scope in Phase 3 when assignments needed the
+   * identical rule. Behaviour is unchanged; this stays as a named method so
+   * every existing call site reads the same as before.
+   */
   private static async assertBatchOnPath(batchId: string, learningPathId: string) {
-    const batch = await prisma.batch.findUnique({
-      where: { id: batchId },
-      select: { id: true, name: true, learningPathId: true },
-    });
-    if (!batch) throw new AppError('Batch not found', 400);
-    if (batch.learningPathId && batch.learningPathId !== learningPathId) {
-      throw new AppError(
-        `"${batch.name}" is running a different learning path, so it cannot receive this content.`,
-        400
-      );
-    }
+    return assertBatchOnPath(batchId, learningPathId);
   }
 
   static async update(

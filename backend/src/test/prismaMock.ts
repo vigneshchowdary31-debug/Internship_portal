@@ -53,6 +53,7 @@ export function createPrismaMock() {
       findMany: vi.fn().mockResolvedValue([]),
       create: vi.fn(),
       update: vi.fn(),
+      delete: vi.fn(),
     },
     learningPath: {
       findUnique: vi.fn(),
@@ -69,9 +70,17 @@ export function createPrismaMock() {
       findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn(),
       count: vi.fn().mockResolvedValue(0),
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
+    /** Backs `instructorBatchIds`, the basis of every instructor-scoped query. */
+    instructorBatch: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
     },
     notification: {
       create: vi.fn(),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
       findMany: vi.fn().mockResolvedValue([]),
     },
     notificationRecipient: {
@@ -87,7 +96,71 @@ export function createPrismaMock() {
       groupBy: vi.fn().mockResolvedValue([]),
     },
 
+    // --- LMS (Phase 3). Appended, same as Phase 2 was: no existing entry is
+    // touched, so every pre-existing test keeps its exact behaviour.
+    assignment: {
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    submission: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      upsert: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+      groupBy: vi.fn().mockResolvedValue([]),
+      aggregate: vi.fn(),
+    },
+    mediaAsset: {
+      findUnique: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      delete: vi.fn(),
+    },
+    quiz: {
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    question: {
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
+    attempt: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+      groupBy: vi.fn().mockResolvedValue([]),
+    },
+
     $transaction: vi.fn(),
+    /** Used by the health probe's `SELECT 1` and by catalog inspections. */
+    $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
 

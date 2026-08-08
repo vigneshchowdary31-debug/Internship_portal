@@ -27,7 +27,9 @@ import {
   Layers,
   BookOpen,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { lmsApi, CONTENT_TYPE_LABELS, type ContentType, type LmsContent } from '@/services/lms';
+import { opensInBrowser, viewerPath } from '@/lib/contentUrl';
 import { cn } from '@/lib/utils';
 
 const TYPE_ICONS: Record<ContentType, typeof FileText> = {
@@ -136,14 +138,32 @@ export function ContentRow({
       </div>
 
       <div className="flex flex-shrink-0 items-center gap-1">
-        {href && (
-          <Button variant="ghost" size="sm" asChild className="h-8">
-            <a href={href} target="_blank" rel="noopener noreferrer">
-              <Eye className="mr-1.5 h-3.5 w-3.5" />
-              Open
-            </a>
-          </Button>
-        )}
+        {href &&
+          // The same in-app viewer students get, so an author previews exactly
+          // what the class will see. Office documents cannot be rendered by any
+          // browser, so those keep the download link.
+          (opensInBrowser(content.type) ? (
+            <Button variant="ghost" size="sm" asChild className="h-8">
+              <Link
+                to={viewerPath({
+                  url: href,
+                  type: content.type,
+                  title: content.title,
+                  moduleId: content.moduleId,
+                })}
+              >
+                <Eye className="mr-1.5 h-3.5 w-3.5" />
+                Open
+              </Link>
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" asChild className="h-8">
+              <a href={href} target="_blank" rel="noopener noreferrer">
+                <Eye className="mr-1.5 h-3.5 w-3.5" />
+                Open
+              </a>
+            </Button>
+          ))}
 
         {canEdit && (
           <DropdownMenu>

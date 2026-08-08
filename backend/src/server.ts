@@ -3,6 +3,9 @@ import './config/env';
 import app from './app';
 import prisma from './config/db';
 import { EmailService } from './services/email.service';
+import { emailQueue } from './services/email/email-queue';
+import { limits } from './config/limits';
+import { logger } from './utils/logger';
 
 const PORT = process.env.PORT || 5001;
 let server: any;
@@ -31,23 +34,77 @@ async function startServer() {
 startServer();
 
 // --- Graceful Shutdown ---
+
+/**
+ * Shuts down in the order that loses the least work:
+ *
+ *   1. Stop accepting new connections, and let in-flight requests finish.
+ *   2. DRAIN THE EMAIL QUEUE. Jobs live in memory, so exiting first discards
+ *      every notification email queued in the last few seconds — exactly the
+ *      ones a deploy mid-grading-session would produce.
+ *   3. Close the database.
+ *
+ * Bounded by a timeout, because a wedged SMTP server must not stop a deploy:
+ * the platform sends SIGKILL some seconds after SIGTERM regardless, and being
+ * killed mid-`$disconnect` is worse than abandoning a few emails.
+ */
+let shuttingDown = false;
+
 const shutdown = async (signal: string) => {
-  console.log(`\n${signal} signal received: closing HTTP server`);
-  if (server) {
-    server.close(async () => {
-      console.log('HTTP server closed');
-      await prisma.$disconnect();
-      console.log('Database connection closed');
-      process.exit(0);
+  // A second Ctrl-C should not start a parallel shutdown; the impatient
+  // operator gets an immediate exit instead.
+  if (shuttingDown) {
+    logger.warn('Second shutdown signal — exiting immediately', { signal });
+    process.exit(1);
+  }
+  shuttingDown = true;
+
+  logger.info('Shutdown signal received', { signal });
+
+  const hardExit = setTimeout(() => {
+    logger.error('Graceful shutdown timed out; forcing exit', {
+      pendingEmails: emailQueue.size,
     });
-  } else {
+    process.exit(1);
+  }, limits.email.shutdownDrainMs + 5000);
+  // Do not let this timer alone keep the process alive.
+  hardExit.unref();
+
+  try {
+    if (server) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      logger.info('HTTP server closed');
+    }
+
+    const pending = emailQueue.size;
+    if (pending > 0) {
+      logger.info('Draining email queue before exit', { count: pending });
+    }
+
+    await Promise.race([
+      emailQueue.drain(),
+      new Promise<void>((resolve) => setTimeout(resolve, limits.email.shutdownDrainMs)),
+    ]);
+
+    if (emailQueue.size > 0) {
+      logger.warn('Exiting with email jobs still queued', { count: emailQueue.size });
+    } else {
+      logger.info('Email queue drained');
+    }
+
     await prisma.$disconnect();
+    logger.info('Database connection closed');
+
+    clearTimeout(hardExit);
     process.exit(0);
+  } catch (error: any) {
+    logger.error('Error during shutdown', { error: error?.message });
+    process.exit(1);
   }
 };
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);

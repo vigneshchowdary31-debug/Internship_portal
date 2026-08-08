@@ -155,7 +155,7 @@ export class StorageService {
   static async deleteAsset(assetId: string): Promise<void> {
     const asset = await prisma.mediaAsset.findUnique({
       where: { id: assetId },
-      include: { _count: { select: { contents: true } } },
+      include: { _count: { select: { contents: true, submissions: true } } },
     });
 
     if (!asset) throw new AppError('Asset not found', 404);
@@ -167,6 +167,18 @@ export class StorageService {
       );
     }
 
+    // Submission.assetId is Restrict, so the database would refuse this anyway —
+    // but as an opaque foreign-key violation. Checking here turns it into an
+    // explanation. Callers that legitimately need to remove a submission's file
+    // (SubmissionService) delete the submission row first, which is what makes
+    // student work impossible to detach from its artifact by accident.
+    if (asset._count.submissions > 0) {
+      throw new AppError(
+        `This file is attached to ${asset._count.submissions} student submission(s) and cannot be deleted.`,
+        400
+      );
+    }
+
     // Provider first: if it fails we keep the row, so the object is never
     // orphaned in storage with no record of it. `delete` now throws on
     // {"result":"not found"} too, so a mismatched key cannot look like success.
@@ -174,10 +186,16 @@ export class StorageService {
     await prisma.mediaAsset.delete({ where: { id: assetId } });
   }
 
-  /** Assets no content references. Surfaced in the admin storage report. */
+  /**
+   * Assets nothing references. Surfaced in the admin storage report.
+   *
+   * The submission clause is not optional: without it every student artifact
+   * would be listed as an orphan the moment Phase 3 shipped, and an admin
+   * acting on that report would be deleting handed-in work.
+   */
   static async findOrphans(limit = 100) {
     return prisma.mediaAsset.findMany({
-      where: { contents: { none: {} } },
+      where: { contents: { none: {} }, submissions: { none: {} } },
       orderBy: { createdAt: 'asc' },
       take: limit,
     });

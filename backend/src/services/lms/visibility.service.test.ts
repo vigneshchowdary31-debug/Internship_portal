@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { isVisible, contentVisibilityWhere } from './visibility.service';
+import {
+  isVisible,
+  contentVisibilityWhere,
+  isAssignmentVisible,
+  assignmentVisibilityWhere,
+  isQuizVisible,
+  quizVisibilityWhere,
+} from './visibility.service';
 
 /**
  * The visibility rule is the single most security-sensitive piece of Phase 1:
@@ -138,5 +145,166 @@ describe('contentVisibilityWhere', () => {
   it('combines status and scope for a student', () => {
     const where = contentVisibilityWhere({ batchId: 'B1', includeUnpublished: false, now: NOW });
     expect(where.AND).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Assignments (Phase 3, M1) — the same rule over a differently shaped table.
+// ---------------------------------------------------------------------------
+
+const assignment = (over: Partial<Parameters<typeof isAssignmentVisible>[0]> = {}) => ({
+  isPublished: true,
+  scope: 'LEARNING_PATH',
+  batchId: null,
+  module: { isVisible: true },
+  ...over,
+});
+
+describe('isAssignmentVisible — publication gating', () => {
+  it('shows a published global assignment to a student', () => {
+    expect(isAssignmentVisible(assignment(), asStudent('B1'))).toBe(true);
+  });
+
+  it('hides a draft from a student', () => {
+    expect(isAssignmentVisible(assignment({ isPublished: false }), asStudent('B1'))).toBe(false);
+  });
+
+  it('shows drafts to an admin', () => {
+    expect(isAssignmentVisible(assignment({ isPublished: false }), asAdmin)).toBe(true);
+  });
+});
+
+describe('isAssignmentVisible — module visibility is respected', () => {
+  it('hides published work sitting in a hidden module', () => {
+    // The module is what a student navigates through; work inside one they
+    // cannot open is work they cannot reach.
+    expect(
+      isAssignmentVisible(assignment({ module: { isVisible: false } }), asStudent('B1'))
+    ).toBe(false);
+  });
+
+  it('still shows it to an admin', () => {
+    expect(isAssignmentVisible(assignment({ module: { isVisible: false } }), asAdmin)).toBe(true);
+  });
+});
+
+describe('isAssignmentVisible — batch scoping', () => {
+  const batchWork = (batchId: string) => assignment({ scope: 'BATCH', batchId });
+
+  it("shows a batch's own work to that batch", () => {
+    expect(isAssignmentVisible(batchWork('B1'), asStudent('B1'))).toBe(true);
+  });
+
+  it("hides another batch's work", () => {
+    expect(isAssignmentVisible(batchWork('B2'), asStudent('B1'))).toBe(false);
+  });
+
+  it('hides batch work from a student with no batch', () => {
+    expect(
+      isAssignmentVisible(batchWork('B1'), { batchId: null, includeUnpublished: false, now: NOW })
+    ).toBe(false);
+  });
+
+  it('shows global work to every batch', () => {
+    expect(isAssignmentVisible(assignment(), asStudent('B1'))).toBe(true);
+    expect(isAssignmentVisible(assignment(), asStudent('B2'))).toBe(true);
+  });
+});
+
+describe('isAssignmentVisible — a deadline is not a visibility gate', () => {
+  it('keeps overdue work visible', () => {
+    // A student must keep seeing work after it is due — both to know they
+    // missed it and to read the mark they were given.
+    expect(isAssignmentVisible(assignment(), asStudent('B1'))).toBe(true);
+  });
+});
+
+describe('assignmentVisibilityWhere', () => {
+  it('returns an unrestricted clause for an admin', () => {
+    expect(assignmentVisibilityWhere({ batchId: null, includeUnpublished: true })).toEqual({});
+  });
+
+  it('gates on publication and module visibility for a student', () => {
+    const where = assignmentVisibilityWhere({ batchId: 'B1', includeUnpublished: false, now: NOW });
+    expect(where).toEqual({
+      AND: [
+        { isPublished: true, module: { isVisible: true } },
+        { OR: [{ scope: 'LEARNING_PATH' }, { scope: 'BATCH', batchId: 'B1' }] },
+      ],
+    });
+  });
+
+  it('builds the union of globals and own-batch work', () => {
+    const where = assignmentVisibilityWhere({ batchId: 'B1', includeUnpublished: true });
+    expect(where.OR).toEqual([
+      { scope: 'LEARNING_PATH' },
+      { scope: 'BATCH', batchId: 'B1' },
+    ]);
+  });
+
+  it("pins an unassigned student to global work only", () => {
+    // Without the explicit scope clause this would return the bare publication
+    // filter, leaking every batch's work to a student who belongs to none.
+    const where = assignmentVisibilityWhere({ batchId: null, includeUnpublished: false, now: NOW });
+    expect(where.AND).toContainEqual({ scope: 'LEARNING_PATH' });
+  });
+
+  it('has no override clause — assignments are never overridden', () => {
+    const where = assignmentVisibilityWhere({ batchId: 'B1', includeUnpublished: true });
+    expect(JSON.stringify(where)).not.toContain('NOT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Quizzes (Phase 3, M3) — the same rule again, over identical columns.
+//
+// These pin that quizzes and assignments resolve IDENTICALLY. If the two ever
+// diverge, one of them is wrong, and this is where that shows up rather than in
+// a leaked answer key.
+// ---------------------------------------------------------------------------
+
+describe('quiz visibility is the assignment rule, unchanged', () => {
+  const contexts = [
+    { name: 'admin', ctx: { batchId: null, includeUnpublished: true } },
+    { name: 'instructor', ctx: { batchId: 'B1', includeUnpublished: true } },
+    { name: 'student in a batch', ctx: { batchId: 'B1', includeUnpublished: false, now: NOW } },
+    { name: 'student with no batch', ctx: { batchId: null, includeUnpublished: false, now: NOW } },
+  ];
+
+  it.each(contexts)('builds the same clause for a $name', ({ ctx }) => {
+    expect(quizVisibilityWhere(ctx)).toEqual(assignmentVisibilityWhere(ctx));
+  });
+
+  const quiz = (over: Partial<Parameters<typeof isQuizVisible>[0]> = {}) => ({
+    isPublished: true,
+    scope: 'LEARNING_PATH',
+    batchId: null,
+    module: { isVisible: true },
+    ...over,
+  });
+
+  it('hides a draft quiz from a student', () => {
+    expect(isQuizVisible(quiz({ isPublished: false }), asStudent('B1'))).toBe(false);
+  });
+
+  it('hides a quiz in a hidden module', () => {
+    expect(isQuizVisible(quiz({ module: { isVisible: false } }), asStudent('B1'))).toBe(false);
+  });
+
+  it("hides another batch's quiz", () => {
+    expect(isQuizVisible(quiz({ scope: 'BATCH', batchId: 'B2' }), asStudent('B1'))).toBe(false);
+  });
+
+  it("shows a batch's own quiz", () => {
+    expect(isQuizVisible(quiz({ scope: 'BATCH', batchId: 'B1' }), asStudent('B1'))).toBe(true);
+  });
+
+  it('shows drafts to an admin', () => {
+    expect(isQuizVisible(quiz({ isPublished: false }), asAdmin)).toBe(true);
+  });
+
+  it('pins an unassigned student to global quizzes only', () => {
+    const where = quizVisibilityWhere({ batchId: null, includeUnpublished: false, now: NOW });
+    expect(where.AND).toContainEqual({ scope: 'LEARNING_PATH' });
   });
 });

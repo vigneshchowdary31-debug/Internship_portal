@@ -23,6 +23,13 @@ const ChangePasswordPage = React.lazy(() => import('../pages/ChangePasswordPage'
 const WelcomePage = React.lazy(() => import('../pages/WelcomePage').then(m => ({ default: m.WelcomePage })));
 const CurriculumBuilder = React.lazy(() => import('../pages/lms/CurriculumBuilder').then(m => ({ default: m.CurriculumBuilder })));
 const MyCourse = React.lazy(() => import('../pages/lms/MyCourse').then(m => ({ default: m.MyCourse })));
+const AssignmentDetailPage = React.lazy(() => import('../pages/lms/AssignmentDetailPage').then(m => ({ default: m.AssignmentDetailPage })));
+const QuizzesManagement = React.lazy(() => import('../pages/admin/QuizzesManagement').then(m => ({ default: m.QuizzesManagement })));
+const QuizQuestionBuilder = React.lazy(() => import('../pages/admin/QuizQuestionBuilder').then(m => ({ default: m.QuizQuestionBuilder })));
+const QuizAttemptPage = React.lazy(() => import('../pages/lms/QuizAttemptPage').then(m => ({ default: m.QuizAttemptPage })));
+const ContentViewerPage = React.lazy(() => import('../pages/lms/ContentViewerPage').then(m => ({ default: m.ContentViewerPage })));
+const QuizResultPage = React.lazy(() => import('../pages/lms/QuizResultPage').then(m => ({ default: m.QuizResultPage })));
+const AssignmentEvaluationPage = React.lazy(() => import('../pages/instructor/AssignmentEvaluationPage').then(m => ({ default: m.AssignmentEvaluationPage })));
 const BatchCurriculum = React.lazy(() => import('../pages/lms/BatchCurriculum').then(m => ({ default: m.BatchCurriculum })));
 
 const SuspenseFallback = () => (
@@ -54,6 +61,8 @@ export const AppRoutes = () => {
           <Route path="/admin/attendance" element={<AdminAttendance />} />
           <Route path="/admin/progress" element={<AdminProgress />} />
           <Route path="/admin/curriculum" element={<CurriculumBuilder />} />
+          <Route path="/admin/quizzes" element={<QuizzesManagement />} />
+          <Route path="/admin/quizzes/:id/questions" element={<QuizQuestionBuilder />} />
           <Route path="/admin/calendar" element={<PlaceholderPage title="Calendar" />} />
           <Route path="/admin/settings" element={<PlaceholderPage title="Settings" />} />
         </Route>
@@ -70,11 +79,21 @@ export const AppRoutes = () => {
         <Route element={<DashboardLayout allowedRoles={['STUDENT']} />}>
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/student/course" element={<MyCourse />} />
+          <Route path="/student/assignments/:id" element={<AssignmentDetailPage />} />
+          <Route path="/quiz/result/:attemptId" element={<QuizResultPage />} />
+          <Route path="/quiz/:attemptId" element={<QuizAttemptPage />} />
+        </Route>
+
+        {/* Grading. Under /instructor by contract, but admins evaluate too —
+            the API authorises both via assertCanEvaluate. */}
+        <Route element={<DashboardLayout allowedRoles={['ADMIN', 'INSTRUCTOR']} />}>
+          <Route path="/instructor/assignments/:id" element={<AssignmentEvaluationPage />} />
         </Route>
 
         {/* Shared Routes */}
         <Route element={<DashboardLayout allowedRoles={['ADMIN', 'INSTRUCTOR', 'STUDENT']} />}>
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/learn/content" element={<ContentViewerPage />} />
         </Route>
 
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
